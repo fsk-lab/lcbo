@@ -10,7 +10,7 @@ This repository contains all scripts to reproduce the experiments described in t
 
 All code is written in Python (tested and stable for `python >= 3.9`). 
 
-Instrument control, data analysis, and HPLC simulation use the `moses` library, which is available through `pip` (`pip install moses-hplc`) or from the Aspuru-Guzik group's [*GitLab* repository](https://gitlab.com/aspuru-guzik-group/self-driving-lab/instruments/moses). Detailed documentation for `moses` can be found in the [package documentation](LINK).
+Instrument control, data analysis, and HPLC simulation use the `moses` library, which is available through `pip` (`pip install moses-hplc`) or from the Aspuru-Guzik group's [*GitLab* repository](https://gitlab.com/aspuru-guzik-group/self-driving-lab/instruments/moses). Detailed documentation for `moses` can be found in the [package documentation](https://moses-hplc.readthedocs.io).
 
 For Bayesian optimization and advanced data interpretation, the following additional libraries are required:
 * `botorch` (developed with `botorch == 0.10.0`)
@@ -20,4 +20,4 @@ For Bayesian optimization and advanced data interpretation, the following additi
 
 ## Data and Results
 
-All data and results from the paper are provided on Zenodo at [LINK](LINK).
+All data and results from the paper are provided on Zenodo at [https://doi.org/10.5281/zenodo.22109729](https://doi.org/10.5281/zenodo.22109729).
