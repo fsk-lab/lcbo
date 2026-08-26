@@ -1,0 +1,9 @@
+{
+    "retention_model": "neue-kuss",
+    "column_length": 0.1,
+    "effective_cross_section": 2.6E-6,
+    "plate_height": 2.2E-11,
+    "pre_injection_volume": 1E-9,
+    "pre_column_volume": 2E-9,
+    "simulation_interval": 0.01
+}

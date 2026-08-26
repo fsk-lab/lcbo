@@ -1,0 +1,42 @@
+{
+  "instrument_config": {
+    "lc_vendor": "Thermo Fisher Scientific",
+    "lc_model": "Vanquish",
+    "lc_software": "Chromeleon",
+    "lc_software_version": "7.2.10",
+    "lc_column": "ThermoFisher Accucore Phenyl-Hexyl (17926-102130) 100 mm x 2.1 mm, 2.6 µm Particle Size, 80 Å Pore Size",
+    "eluents": {
+      "A1": "Water",
+      "A2": "Water",
+      "A3": "Water (0.1% Formic Acid)",
+      "B1": "Acetonitrile (0.1% Formic Acid)",
+      "B2": "Methanol",
+      "B3": "Acetonitrile (5% THF, 0.1% Formic Acid)"
+    },
+    "ms_vendor": "Thermo Fisher Scientific",
+    "ms_model": "Q Exactive",
+    "ms_software": "Xcalibur",
+    "ms_software_version": "2.9 SP4 Build 2954",
+    "mass_analyzers": [
+      {
+        "name": "quadrupole"
+      },
+      {
+        "name": "orbitrap"
+      }
+    ],
+    "ion_detector": "inductive detector",
+    "offset_volume": 0.016
+  },
+  "software_settings": {
+    "instrument_name": "UofT_LCMS_QE",
+    "data_vault": "chrom://fnsvnr2/Chromeleon D/",
+    "sequence_template": "Templates/Sequence_Template.seq",
+    "auto_export_folder": "D:/temp/",
+    "default_methods": {
+      "positive": "Templates/Method_Template_Pos.instmeth",
+      "negative": "Templates/Method_Template_Neg.instmeth",
+      "positive_negative": "Templates/Method_Template_PosNeg.instmeth"
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "instrument_vendor": "ThermoFisher",
+  "instrument_config_file": "configs/thermo_lcms_config.json",
+  "eluents": [
+    "Water (0.1% Formic Acid)",
+    "Acetonitrile (0.1% Formic Acid)"
+  ],
+  "blank": "B:B2",
+  "equilibration_time": 1.0,
+  "uv_wavelength_range": [240.0, 280.0],
+  "uv_baseline_correction": true,
+  "uv_baseline_algorithm": "rolling_ball",
+  "uv_peak_detection_threshold": 2.5,
+  "uv_min_peak_fwhm": 0.01,
+  "uv_peak_deconvolution": true,
+  "uv_peak_deconvolution_model": "SkewedGaussian",
+  "ms_mode": "positive_negative",
+  "ms_ionization_modes": [
+    {"formula":  "H", "charge": 1, "addition": true},
+    {"formula":  "H", "charge": 1, "addition": false}
+  ],
+  "ms_peak_detection_threshold": 1.0E5,
+  "ms_rel_tolerance": 25.0,
+  "reporting_properties": [
+    "Peak Time",
+    "Start Time",
+    "End Time",
+    "Area",
+    "Asymmetry Factor",
+    "Peak Purity (UV)",
+    "Peak Purity (MS)",
+    "Annotation"
+  ],
+  "scoring_resolution_threshold": 1.5,
+  "log_level": "INFO"
+}
