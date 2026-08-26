@@ -17,7 +17,6 @@ if __name__ == "__main__":
     instrument = experiment_config.get_instrument()
 
     initial_gradients = [
-        {"proportions_b": [1.0, 1.0], "time_steps": [0.0, 12.0]},
         {"proportions_b": [0.2, 0.4, 1.0, 1.0], "time_steps": [0.0, 5.0, 15.0, 20.0]},
         {"proportions_b": [0.1, 0.3, 0.8, 1.0], "time_steps": [0.0, 3.0, 12.0, 25.0]},
         {"proportions_b": [0.5, 0.6, 0.9, 1.0], "time_steps": [0.0, 1.0, 15.0, 21.0]},

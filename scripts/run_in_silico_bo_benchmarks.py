@@ -62,25 +62,9 @@ if __name__ == "__main__":
 
     data_dir = Path.cwd() / "results" / "in_silico_bo_benchmarks"
 
-    SMOKE_TEST = True
-
-    # edit values that are passed through the command line
-    if SMOKE_TEST:
-        import sys
-        sys.argv.extend([
-            "--num_compound_sets", "5",
-            "--iterations_per_compound_set", "1",
-            "--budget", "10",
-            "--objective_type", "compoundwise",
-            "--objective", "SinglePeak-Resolution",
-            "--compound_idx", "3",
-            "--log_level", "DEBUG",
-        ])
-
     num_jobs = 4  # number of parallel CPU jobs to run
     config = HPLCOptimizationBenchmarkConfig.from_argparse()
     config.optimization_config.working_dir = data_dir / config.tag
-    # config.working_dir.mkdir(parents=True, exist_ok=True)
     results = HPLCOptimizationBenchmark(config)
     emulator = get_simulator(config.experiment_config)
 

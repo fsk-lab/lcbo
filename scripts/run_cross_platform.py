@@ -5,7 +5,7 @@ from moses.datatypes import LCGradient
 
 if __name__ == "__main__":
 
-    instrument = "termo"  # "agilent"
+    instrument = "Thermo"  # "Agilent"
     sample_name = "7-Compound-Mixture"
     injection_volume = 2.0
 
@@ -20,7 +20,7 @@ if __name__ == "__main__":
         equilibration_time=3.0,
     )
 
-    if instrument == "thermo":
+    if instrument == "Thermo":
         from moses.chromeleon import ThermoHPLCMSController
 
         with open(Path.cwd() / "configs" / "thermo_instrument_config.json", "r") as f:
@@ -30,7 +30,7 @@ if __name__ == "__main__":
         sample_position = "G:F1"
         results_folder = "Felix/LCBO"
 
-    elif instrument == "agilent":
+    elif instrument == "Agilent":
         from moses.agilent import AgilentHPLCMSController
 
         with open(Path.cwd() / "configs" / "agilent_lcms_config.json", "r") as f:
