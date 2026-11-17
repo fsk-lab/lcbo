@@ -28,6 +28,7 @@ def get_simulator(config_file: Path) -> Simulator:
 def get_simulator_from_data(
         data: HPLCOptimizationCampaign,
         column_length: float,
+        column_inner_diameter: float,
         simulation_interval: float,
         retention_model: str = "linear",
         previous_simulator: Optional[Simulator] = None,
@@ -35,6 +36,7 @@ def get_simulator_from_data(
 ) -> tuple[Simulator, AnalyteSet]:
     """
     Fit a simulator based on the provided dataset and retention model. Can be used as a low-fidelity experiment.
+    Column length and nominal inner diameter are specified in meters.
     """
     runs = []
     valid_counts = [0 for _ in range(data.config.num_compounds)]
@@ -74,9 +76,10 @@ def get_simulator_from_data(
 
     try:
         simulator, cmpd_params = Simulator.from_data(
-            retention_model,
-            column_length,
-            simulation_interval,
+            retention_model=retention_model,
+            column_length=column_length,
+            column_inner_diameter=column_inner_diameter,
+            simulation_interval=simulation_interval,
             runs=runs,
             simulator_initial_guess=simulator_initial_guess,
             compounds_initial_guess=compounds_initial_guess,
@@ -89,6 +92,7 @@ def get_simulator_from_data(
                 {
                     "retention_model": retention_model,
                     "column_length": column_length,
+                    "column_inner_diameter": column_inner_diameter,
                     "simulation_interval": simulation_interval,
                     "runs": runs,
                 },

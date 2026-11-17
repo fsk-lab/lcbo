@@ -277,7 +277,8 @@ def run_optimization_campaign(
             if lf_train_size != campaign.num_high_fidelity_experiments:
                 lf_simulator, lf_compounds_fitted = get_simulator_from_data(
                     data=campaign,
-                    column_length=0.1,  # ATTN: Hard-coded for the time being...
+                    column_length=instrument.parameters["column_length"] if simulation else optimization_config.column_length,
+                    column_inner_diameter=optimization_config.column_inner_diameter,
                     simulation_interval=0.01,
                     previous_simulator=lf_simulator,
                     previous_compound_params=lf_compounds_fitted

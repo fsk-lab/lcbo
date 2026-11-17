@@ -51,22 +51,22 @@ def run_simulation_experiment(
     areas = [d["pre_exp_factor"] * d["sigma"] * np.sqrt(2 * np.pi) for d in cmpd_data]
 
     peak_resolutions = [np.nan for _ in range(len(retention_times))]
-    _retention_times_sorted = [retention_times[i] for i in np.argsort(retention_times)]
-    _sigma_sorted = [sigmas[i] for i in np.argsort(retention_times)]
-    for i in range(len(retention_times)):
-        original_idx = np.argsort(retention_times)[i]
+    valid_indices = [i for i in np.argsort(retention_times) if np.isfinite(retention_times[i]) and np.isfinite(sigmas[i])]
+    for i, original_idx in enumerate(valid_indices):
         if i == 0:
             resolution_backward = np.inf
         else:
-            retention_time_diff = _retention_times_sorted[i] - _retention_times_sorted[i - 1]
-            sigma_sum = _sigma_sorted[i] + _sigma_sorted[i - 1]
+            previous_idx = valid_indices[i - 1]
+            retention_time_diff = retention_times[original_idx] - retention_times[previous_idx]
+            sigma_sum = sigmas[original_idx] + sigmas[previous_idx]
             resolution_backward = retention_time_diff / (2 * sigma_sum)
 
-        if i == len(retention_times) - 1:
+        if i == len(valid_indices) - 1:
             resolution_forward = np.inf
         else:
-            retention_time_diff = _retention_times_sorted[i + 1] - _retention_times_sorted[i]
-            sigma_sum = _sigma_sorted[i] + _sigma_sorted[i + 1]
+            next_idx = valid_indices[i + 1]
+            retention_time_diff = retention_times[next_idx] - retention_times[original_idx]
+            sigma_sum = sigmas[next_idx] + sigmas[original_idx]
             resolution_forward = retention_time_diff / (2 * sigma_sum)
 
         peak_resolutions[original_idx] = min(resolution_backward, resolution_forward)

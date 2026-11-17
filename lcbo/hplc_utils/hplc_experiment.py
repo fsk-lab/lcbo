@@ -41,19 +41,20 @@ class HPLCExperiment:
     def single_peak_elution_resolution(self, peak_idx: int) -> tuple[float, float]:
         """
         Returns the elution (1: eluted, 0: non-eluted) and the resolution of the specified peak.
+        If no finite pairwise resolution is available, return zero resolution while retaining the detection status.
 
         Args:
             peak_idx (int): The index of the peak to evaluate.
         """
-        if np.isfinite(self.peak_resolutions[peak_idx]):
-            return 1.0, self.peak_resolutions[peak_idx].item()
+        if np.isfinite(self.retention_times[peak_idx]) and np.isfinite(self.fwhms[peak_idx]):
+            resolution = self.peak_resolutions[peak_idx]
+            return 1.0, resolution.item() if np.isfinite(resolution) else 0.0
         else:
             return 0.0, 0
 
     @property
     def num_peaks(self) -> int:
-        real_resolutions = self.peak_resolutions[np.isfinite(self.peak_resolutions)]
-        return int(len(real_resolutions))
+        return int(np.sum(np.isfinite(self.retention_times) & np.isfinite(self.fwhms)))
 
     def num_resolved_peaks(self, resolution_threshold: float = 1.5) -> int:
         real_resolutions = self.peak_resolutions[np.isfinite(self.peak_resolutions)]

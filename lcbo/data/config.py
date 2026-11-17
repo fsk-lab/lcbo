@@ -243,6 +243,8 @@ class HPLCOptimizationConfig(object):
     __segment_based: bool = False  # if True, optimize segment lengths instead of time points
     __max_run_time: float = 20.0  # minutes
     __flow_rate: float = 0.4  # mL/min, fixed for now
+    __column_length: float = 0.1  # m
+    __column_inner_diameter: float = 0.0021  # m
 
     __experiment_config: Path = Path.cwd() / "configs" / "simulator_config.json"
     __advanced_peak_detection: bool = True
@@ -278,6 +280,8 @@ class HPLCOptimizationConfig(object):
             segment_based: Optional[bool] = None,
             max_run_time: Optional[float] = None,
             flow_rate: Optional[float] = None,
+            column_length: Optional[float] = None,
+            column_inner_diameter: Optional[float] = None,
             experiment_config: Optional[Path] = None,
             advanced_peak_detection: Optional[bool] = None,
             surrogate_model: Optional[str] = None,
@@ -315,6 +319,10 @@ class HPLCOptimizationConfig(object):
         self.segment_based = segment_based if segment_based is not None else self.__segment_based
         self.max_run_time = max_run_time or self.__max_run_time
         self.flow_rate = flow_rate or self.__flow_rate
+        self.column_length = column_length if column_length is not None else self.__column_length
+        self.column_inner_diameter = column_inner_diameter if column_inner_diameter is not None else self.__column_inner_diameter
+        if self.column_length <= 0 or self.column_inner_diameter <= 0:
+            raise ValueError("Column length and inner diameter must be positive (in meters).")
         self.constraint_generator = LCGradientConstraints(
             num_segments=self.num_segments,
             min_segment_length=self.min_segment_length,
@@ -509,6 +517,8 @@ class HPLCOptimizationConfig(object):
             "segment_based": self.segment_based,
             "max_run_time": self.max_run_time,
             "flow_rate": self.flow_rate,
+            "column_length": self.column_length,
+            "column_inner_diameter": self.column_inner_diameter,
             "experiment_config": str(self.experiment_config),
             "advanced_peak_detection": self.advanced_peak_detection,
             "surrogate_model": self.surrogate_model,
@@ -548,6 +558,8 @@ class HPLCOptimizationConfig(object):
             segment_based=data.get("segment_based"),
             max_run_time=data.get("max_run_time"),
             flow_rate=data.get("flow_rate"),
+            column_length=data.get("column_length"),
+            column_inner_diameter=data.get("column_inner_diameter"),
             experiment_config=Path(data["experiment_config"]) if data.get("experiment_config") else None,
             advanced_peak_detection=data.get("advanced_peak_detection"),
             surrogate_model=data.get("surrogate_model"),
@@ -598,7 +610,7 @@ class HPLCOptimizationBenchmarkConfig(object):
         self.iterations_per_compound_set = iterations_per_compound_set or self.__iterations_per_compound_set
 
         for attr in ("num_segments", "min_segment_length", "max_run_time", "segment_based", "flow_rate", "compound_idx",
-                     "experiment_config", "advanced_peak_detection", "surrogate_model", "acquisition_function",
+                     "column_length", "column_inner_diameter", "experiment_config", "advanced_peak_detection", "surrogate_model", "acquisition_function",
                      "budget", "seed_budget", "seed_strategy", "multi_fidelity", "only_current_fidelity",
                      "max_simulation_fidelity", "simulation_fidelity_decay", "low_fidelity_cost",
                      "max_consecutive_low_fidelity", "objective", "objective_type",
@@ -674,6 +686,8 @@ class HPLCOptimizationBenchmarkConfig(object):
         parser.add_argument("--min_segment_length", type=float, default=None, help="Minimum length of each gradient segment (minutes).")
         parser.add_argument("--segment_based", action="store_true", default=None, help="Optimize segment lengths instead of time points.")
         parser.add_argument("--max_run_time", type=float, default=None, help="Maximum run time for the gradient (minutes).")
+        parser.add_argument("--column_length", type=float, default=None, help="Column length in meters.")
+        parser.add_argument("--column_inner_diameter", type=float, default=None, help="Nominal column inner diameter in meters.")
         parser.add_argument("--experiment_config", type=str, default=None, help="Path to the experiment configuration file.")
         parser.add_argument("--basic_peak_detection", action="store_true", default=None, help="Use single-trace peak detection algorithm.")
         parser.add_argument("--surrogate_model", type=str, default=None, help="Type of surrogate model to use.")
@@ -703,6 +717,8 @@ class HPLCOptimizationBenchmarkConfig(object):
             min_segment_length=args.min_segment_length,
             segment_based=args.segment_based,
             max_run_time=args.max_run_time,
+            column_length=args.column_length,
+            column_inner_diameter=args.column_inner_diameter,
             experiment_config=Path(args.experiment_config) if args.experiment_config else None,
             advanced_peak_detection=not args.basic_peak_detection,
             surrogate_model=args.surrogate_model,

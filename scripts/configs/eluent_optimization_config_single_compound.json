@@ -5,6 +5,8 @@
     "segment_based": false,
     "max_run_time": 30.0,
     "flow_rate": 0.4,
+    "column_length": 0.1,
+    "column_inner_diameter": 0.0021,
     "experiment_config": "configs/experiment_config.json",
     "advanced_peak_detection": true,
     "surrogate_model": "GP",

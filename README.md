@@ -8,7 +8,7 @@ This repository contains all scripts to reproduce the experiments described in t
 
 ## Dependencies
 
-All code is written in Python (tested and stable for `python >= 3.9`). 
+All code is written in Python (requires `python >= 3.10`).
 
 Instrument control, data analysis, and HPLC simulation use the `moses` library, which is available through `pip` (`pip install moses-hplc`) or from the Aspuru-Guzik group's [*GitLab* repository](https://gitlab.com/aspuru-guzik-group/self-driving-lab/instruments/moses). Detailed documentation for `moses` can be found in the [package documentation](LINK).
 

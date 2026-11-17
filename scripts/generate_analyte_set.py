@@ -28,12 +28,13 @@ def sample_analyte_set(
 
     This is done as follows:
       1. Sample log_k0 values from a normal distribution.
-      2. Sample S_1 from a normal distribution centered at 35.0 + 8.0 * log_k0 (empirically derived).
+      2. Sample S_1 from a normal distribution centered at 35.0 + 8.5 * log_k0 (empirically derived).
       3. Sample S_2 from a normal distribution centered at 4.05 + 0.19 * log_k0 (empirically derived).
       4. Accept a compound if the following criteria are met:
            - log_k0 is within 5.0 to 19.0
+           - S_2 is non-negative and S_1 >= 2 * S_2 * (1 + S_2), so retention decreases with solvent strength.
            - The log_k0 value is sufficiently distant from all previously accepted compounds, as defined by a
-             logistic distance criterion: d = 3.0 - 2.5 / (1 + exp(-(log_k0 - log_k0_distance_threshold))). This ensures
+             logistic distance criterion: d = 2.0 - 1.75 / (1 + exp(-(log_k0 - log_k0_distance_threshold))). This ensures
              that for small log_k0 values, compounds are reasonably spaced, since otherwise, they elute too closely.
            - The compound elutes within 0.5 * max_run_time under an isocratic gradient at 100% B.
            - For each of the existing compounds, there is at least one isocratic gradient that separates the new
@@ -98,6 +99,9 @@ def sample_analyte_set(
             generator=generator
         ).item()
 
+        if S_2 < 0 or S_1 < 2 * S_2 * (1 + S_2):
+            continue
+
         area = 20.0 + 30.0 * torch.rand(1, generator=generator, dtype=torch.float64).item()
 
         # calculate retention behavior for all isocratic gradients
@@ -116,7 +120,7 @@ def sample_analyte_set(
         valid_resolution = []
         for existing_idx in range(len(cmpd_set)):
             diff = retention_behavior[len(cmpd_set), :, 0] - retention_behavior[existing_idx, :, 0]
-            denom = 4 * (retention_behavior[len(cmpd_set), :, 1] + retention_behavior[existing_idx, :, 1])
+            denom = 2 * (retention_behavior[len(cmpd_set), :, 1] + retention_behavior[existing_idx, :, 1])
             resolutions = np.abs(diff) / denom
             valid = (resolutions > 1.5) & (retention_behavior[len(cmpd_set), :, 0] < 0.5 * max_run_time) & (retention_behavior[existing_idx, :, 0] < 0.5 * max_run_time)
             valid_resolution.append(np.any(valid))
