@@ -1,6 +1,6 @@
 {
   "instrument_vendor": "ThermoFisher",
-  "instrument_config_file": "configs/thermo_lcms_config.json",
+  "instrument_config_file": "scripts/configs/thermo_instrument_config.json",
   "eluents": [
     "Water (0.1% Formic Acid)",
     "Acetonitrile (0.1% Formic Acid)"
