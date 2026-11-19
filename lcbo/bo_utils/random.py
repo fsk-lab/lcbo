@@ -1,6 +1,6 @@
 from typing import Optional
 import torch
-from botorch.utils.sampling import DelaunayPolytopeSampler
+from botorch.utils.sampling import HitAndRunPolytopeSampler
 from botorch.utils.sampling import normalize_linear_constraints, sparse_to_dense_constraints
 
 
@@ -10,12 +10,12 @@ def sample_from_polytope(
         n_samples: int,
         thinning: int = 32,
         seed: Optional[int] = None
-):
+) -> torch.Tensor:
     """
     Samples from a polytope defined by bounds and inequality constraints. This gives more representative samples than
     randomly sampling from the bounds.
 
-    Uses a DelaunayPolytopeSampler, as implemented in botorch.utils.sampling.
+    Uses a HitAndRunPolytopeSampler, as implemented in botorch.utils.sampling.
 
     Args:
         bounds: Bounds for the input data (2 x n_features).
@@ -39,7 +39,11 @@ def sample_from_polytope(
         dense_constraints = None
 
     # instantiate sampler and draw samples
-    sampler = DelaunayPolytopeSampler(inequality_constraints=dense_constraints, bounds=normalized_bounds)
+    sampler = HitAndRunPolytopeSampler(
+        inequality_constraints=dense_constraints,
+        bounds=normalized_bounds,
+        n_burnin=1024
+    )
     samples = sampler.draw(n=n_samples*thinning, seed=seed)[::thinning]
 
     return bounds[0] + samples * (bounds[1] - bounds[0])
