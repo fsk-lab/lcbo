@@ -52,6 +52,7 @@ if __name__ == "__main__":
         injection_volume=injection_volume
     )
 
+    data_dir.mkdir(parents=True, exist_ok=True)
     data.save(data_dir / f"{sample_name}_{instrument}.npz")
 
 

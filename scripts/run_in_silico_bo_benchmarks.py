@@ -1,12 +1,12 @@
 import os
 from pathlib import Path
-import torch
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
+import torch
 from joblib import Parallel, delayed
 from lcbo.data.config import HPLCOptimizationBenchmarkConfig
 from lcbo.data.campaign import HPLCOptimizationBenchmark, HPLCOptimizationCampaign
