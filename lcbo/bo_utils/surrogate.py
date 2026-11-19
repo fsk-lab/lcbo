@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 from botorch.models.model import Model
-from botorch.models import SingleTaskGP, SingleTaskMultiFidelityGP
+from botorch.models import SingleTaskGP, SingleTaskMultiFidelityGP, ModelListGP, ModelList
 from botorch.models.transforms import Standardize, Normalize
 from botorch.fit import fit_gpytorch_mll
 from gpytorch.mlls import ExactMarginalLogLikelihood
@@ -29,8 +29,15 @@ class FixedFidelitySurrogate(Model):
         self.base_model = base_model
         if isinstance(fixed_fidelity, float):
             fixed_fidelity = torch.tensor(fixed_fidelity, dtype=torch.get_default_dtype())
-        self.fixed_fidelity = fixed_fidelity
+        self.register_buffer("fixed_fidelity", torch.as_tensor(fixed_fidelity))
         self.fidelity_index = fidelity_index
+
+    @property
+    def num_outputs(self) -> int:
+        """
+        Exposes the output count to acquisition functions.
+        """
+        return self.base_model.num_outputs
 
     def posterior(self, X: torch.Tensor, **kwargs):
         """
@@ -43,7 +50,7 @@ class FixedFidelitySurrogate(Model):
         Returns:
             Posterior: The posterior predictions from the base model at the fixed fidelity level.
         """
-        fixed_fidelity_column = self.fixed_fidelity.expand(*X.shape[:-1], 1)
+        fixed_fidelity_column = self.fixed_fidelity.to(X).expand(*X.shape[:-1], 1)
         X_fixed = torch.cat(
             [
                 X[..., :self.fidelity_index],
@@ -109,6 +116,15 @@ def train_gp_surrogate(
         y: Output data (n_points or n_points x n_tasks).
         bounds: Bounds for the input data (2 x n_features).
     """
+    if not torch.isfinite(y).all():  # handles non-finite targets
+        models = []
+        for output in range(y.shape[-1]):
+            valid = torch.isfinite(y[:, output])
+            if not valid.any():
+                raise ValueError(f"No finite observations for model output {output}.")
+            models.append(train_gp_surrogate(config, x[valid], y[valid, output:output+1], bounds))
+        return ModelListGP(*models)
+
     if config.single_fidelity:
         model = SingleTaskGP(
             x,
@@ -140,6 +156,7 @@ def train_nn_surrogate(
 ) -> Model:
     """
     Trains a laplace_bayesopt.LaplaceBoTorch model on the input data.
+    If targets are missing, fits each output separately using its finite observations, as for the GP.
 
     Args:
         config: HPLCOptimizationConfig: The optimization configuration.
@@ -149,6 +166,18 @@ def train_nn_surrogate(
     """
     if config.multi_fidelity:
         raise NotImplementedError("Multi-fidelity neural network surrogate models are not implemented yet.")
+
+    if not torch.isfinite(y).all():
+        models = []
+        for output in range(y.shape[-1]):
+            valid = torch.isfinite(y[:, output])
+            if not valid.any():
+                raise ValueError(f"No finite observations for model output {output}.")
+            models.append(train_nn_surrogate(config, x[valid], y[valid, output:output+1], bounds))
+        return ModelList(*models)
+
+    if not len(x):
+        raise ValueError("No finite observations for neural-network fitting.")
 
     if config.surrogate_model == "NN":
         layer_sizes = [50]
@@ -174,4 +203,6 @@ def train_nn_surrogate(
         outcome_transform=Standardize(m=y.shape[1])
     )
 
+    model.bnn.prior_precision = model.bnn.prior_precision.detach()
+    model.bnn.sigma_noise = model.bnn.sigma_noise.detach()
     return model

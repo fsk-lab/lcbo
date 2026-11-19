@@ -101,7 +101,7 @@ def optimize_acquisition_function(
 
     # Resolve the acquisition function
     if config.acquisition_function.lower() == "random":
-        return sample_from_polytope(config.bounds, config.constraints, n_samples=1)
+        return True, sample_from_polytope(config.bounds, config.constraints, n_samples=1)
     elif config.acquisition_function.lower() == "ei":
         best_f = float(np.max(campaign.scores))
         acqf = qExpectedImprovement(model=surrogate, best_f=best_f, objective=config.optimization_objective)
@@ -153,12 +153,27 @@ def optimize_acquisition_function(
     if config.single_fidelity:
         return True, candidates
     else:
-        var_red_hf = determine_variance_reduction(surrogate.base_model, candidates, config, fidelity_level=1.0)
-        var_red_lf = determine_variance_reduction(surrogate.base_model, candidates, config, fidelity_level=0.0)
-        config.logger.debug(f"Variance reduction at candidate point: LF={var_red_lf:.2e}, HF={var_red_hf:.2e}")
-        run_hf = var_red_lf / config.low_fidelity_cost < var_red_hf
+        var_red_hf = determine_variance_reduction(
+            surrogate.base_model,
+            candidates,
+            config,
+            fidelity_level=1.0
+        )
 
-        return run_hf, candidates
+        var_red_lf = determine_variance_reduction(
+            surrogate.base_model,
+            candidates,
+            config,
+            fidelity_level=campaign.expected_fidelity_level
+        )
+        config.logger.debug(f"Variance reduction at candidate point: LF={var_red_lf:.2e}, HF={var_red_hf:.2e}")
+
+        if var_red_hf <= 0:
+            return True, candidates
+        elif var_red_lf / config.low_fidelity_cost <= var_red_hf:
+            return True, candidates
+
+        return False, candidates
 
 
 def determine_variance_reduction(
@@ -193,14 +208,14 @@ def determine_variance_reduction(
         float: The expected variance reduction at the candidate point.
     """
     # Step 1: Generate reference points and filter based on objective values
-    ref_points = sample_from_polytope(config.bounds, config.constraints, num_references)  # (n, d)
+    ref_points = sample_from_polytope(config.bounds, config.constraints, num_references, seed=torch.initial_seed())  # (n, d)
     with torch.no_grad():
         x_ = torch.cat([ref_points, torch.ones(ref_points.shape[0], 1)], dim=-1)  # (n, d+1)
-        posterior_means = surrogate_model.posterior(x_).mean.squeeze(-2)  # (n, m)
+        posterior_means = surrogate_model.posterior(x_).mean  # (n, m)
     obj_values = config.optimization_objective(posterior_means, ref_points)  # (n,)
     mask = obj_values >= obj_values.quantile(trust_region_quantile)
-    ref_points = ref_points[mask, ...].squeeze(-2)  # (r, d)
-    posterior_means = posterior_means[mask, ...].squeeze(-2)  # (r, m)
+    ref_points = ref_points[mask, ...]  # (r, d)
+    posterior_means = posterior_means[mask, ...]  # (r, m)
 
     # Step 2: Compute covariance reduction for each model output in the ModelList
     z_ref = torch.cat([ref_points, torch.ones(ref_points.shape[0], 1)], dim=-1)  # (r, d+1)
@@ -208,15 +223,26 @@ def determine_variance_reduction(
     z = torch.cat([z_ref, z_cand], dim=0)  # (r+1, d+1)
 
     var_red = torch.empty(z_ref.shape[0], posterior_means.shape[1])  # (r, m)
+
+    def leaf_models(model: Model) -> list[Model]:  # needed for output ordering
+        if hasattr(model, "models"):
+            return [leaf for child in model.models for leaf in leaf_models(child)]
+        return [model]
+
     output_idx = 0
-    for model in surrogate_model.models:
+    for model in leaf_models(surrogate_model):
         with torch.no_grad():
-            cov = model.posterior(z.unsqueeze(0)).mvn.covariance_matrix.squeeze(0)  # (r*m_, r*m_)
-            cov = cov.reshape(z.shape[0], model.num_outputs, z.shape[0], model.num_outputs)  # (r+1, m_, r+1, m_)
+            posterior = model.posterior(z)
+            cov = posterior.mvn.covariance_matrix
+            if model.num_outputs == 1 or getattr(posterior.mvn, "_interleaved", True):
+                cov = cov.reshape(z.shape[0], model.num_outputs, z.shape[0], model.num_outputs)
+            else:
+                cov = cov.reshape(model.num_outputs, z.shape[0], model.num_outputs, z.shape[0]).permute(1, 0, 3, 2)
+            observation_variances = model.posterior(z_cand, observation_noise=True).variance.reshape(-1)
 
         for i in range(model.num_outputs):
-            cov_i = cov[:, i, :, i]  # (r+1, r+1)
-            var_red[:, output_idx] = (cov_i[:-1, -1] ** 2 / cov_i[-1, -1]).detach()
+            cov_i = cov[:, i, :, i]
+            var_red[:, output_idx] = (cov_i[:-1, -1] ** 2 / observation_variances[i].clamp_min(1E-12)).detach()
             output_idx += 1
 
     # Step 3: Compute gradients of the objective at the reference points

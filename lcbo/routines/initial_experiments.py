@@ -48,7 +48,7 @@ def generate_seed_experiments(
         fractions = np.linspace(0.05, 0.95, config.seed_budget)
         gradients = []
         for frac in fractions:
-            _time_steps = np.sort(np.random.rand(config.num_segments - 1)) * config.max_run_time
+            _time_steps = np.linspace(0.0, config.max_run_time, config.num_segments + 1)[1:-1]
             _fractions = np.full((config.num_segments + 1,), frac)
 
             if config.segment_based is False:
