@@ -7,6 +7,11 @@ import numpy as np
 import torch
 from moses.simulator import Simulator
 from moses.datatypes import LCGradient
+
+# quick hacky fix
+import sys
+sys.path.append(str(Path(__file__).parent.parent))
+
 from lcbo.data.config import HPLCOptimizationConfig
 from lcbo.hplc_utils.analyte import Analyte, AnalyteSet
 from lcbo.routines.initial_experiments import generate_seed_experiments
@@ -236,6 +241,7 @@ if __name__ == "__main__":
             )
             print(f"Sampled compound set {cmpd_set_idx + 1} / {NUM_COMPOUND_SETS}.")
             scores = test_separability(cmpd_set, simulator, grad_config, num_gradients=NUM_GRADIENTS)
+            print(f"Analyzed separability of compound set {cmpd_set_idx + 1} / {NUM_COMPOUND_SETS}.")
             stats.append(scores)
 
         except RuntimeError as e:
