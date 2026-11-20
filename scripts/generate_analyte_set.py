@@ -1,6 +1,8 @@
 from pathlib import Path
+import copy
 from tqdm import tqdm
 import json
+import argparse
 import numpy as np
 import torch
 from moses.simulator import Simulator
@@ -15,91 +17,94 @@ def sample_analyte_set(
         num_compounds: int,
         ref_simulator: Simulator,
         max_run_time: float,
-        log_k0_mean: float = 12.0,
-        log_k0_std: float = 4.0,
-        log_k0_distance_threshold: float = 8.0,
+        log_k0_mean: float = 8.0,
+        log_k0_std: float = 3.0,
+        log_k0_bounds: tuple[float, float] = (2.0, 16.0),
+        log_k1_mean: float = -1.0,
+        log_k1_bounds: tuple[float, float] = (-5.0, 1.0),
         s_1_relative_std: float = 0.2,
-        s_2_relative_std: float = 0.1,
-        random_seed: int = 0
+        s_1_bounds: tuple[float, float] = (1.0, 100.0),
+        s_2_mean: float = 1.0,
+        s_2_relative_std: float = 0.5,
+        s_2_bounds: tuple[float, float] = (0.0, 3.0),
+        random_seed: int = 0,
+        flow_rate: float = 0.4,
+        max_attempts: int = 10000
 ) -> AnalyteSet:
     """
-    Largely empirical method to sample a set of analytes (following a Neue-Kuss retention model) such that all
-    compounds are likely separable.
+    Sample separable analytes from a synthetic Neue-Kuss prior.
 
-    This is done as follows:
-      1. Sample log_k0 values from a normal distribution.
-      2. Sample S_1 from a normal distribution centered at 35.0 + 8.5 * log_k0 (empirically derived).
-      3. Sample S_2 from a normal distribution centered at 4.05 + 0.19 * log_k0 (empirically derived).
+    Proceeds as follows:
+      1. Sample log_k0 from a bounded normal distribution.
+      2. Sample S_2 independently from a bounded log-normal distribution.
+      3. Sample S_1 from a log-normal distribution centered at (1 + S_2) * (log_k0 + 2 * log(1 + S_2) - log_k1_mean).
       4. Accept a compound if the following criteria are met:
-           - log_k0 is within 5.0 to 19.0
-           - S_2 is non-negative and S_1 >= 2 * S_2 * (1 + S_2), so retention decreases with solvent strength.
-           - The log_k0 value is sufficiently distant from all previously accepted compounds, as defined by a
-             logistic distance criterion: d = 2.0 - 1.75 / (1 + exp(-(log_k0 - log_k0_distance_threshold))). This ensures
-             that for small log_k0 values, compounds are reasonably spaced, since otherwise, they elute too closely.
-           - The compound elutes within 0.5 * max_run_time under an isocratic gradient at 100% B.
-           - For each of the existing compounds, there is at least one isocratic gradient that separates the new
-             compound from the existing compounds by a resolution of at least 1.5 and within 0.5 * max_run_time.
+         - The compound elutes within half of max_run_time at 100% B.
+         - For each of the existing compounds, there is at least one isocratic gradient that separates the new compound
+           from the existing compound by a resolution of >1.5 within half of max_run_time.
 
     Args:
-        num_compounds (int): The number of compounds to sample.
-        ref_simulator (Simulator): A reference simulator to use for elution time and resolution calculations.
-        max_run_time (float): The maximum run time for the chromatographic method.
-        log_k0_mean (float): The mean of the normal distribution for log_k0 sampling.
-        log_k0_std (float): The standard deviation of the normal distribution for log_k0 sampling.
-        log_k0_distance_threshold (float): The distance threshold parameter for the logistic distance criterion.
-        s_1_relative_std (float): The relative standard deviation for S_1 sampling.
-        s_2_relative_std (float): The relative standard deviation for S_2 sampling.
-        random_seed (int): The random seed for reproducibility.
+        num_compounds (int): Number of analytes to sample.
+        ref_simulator (Simulator): Reference simulator using the Neue-Kuss retention model.
+        max_run_time (float): Maximum chromatographic run time in minutes.
+        log_k0_mean (float): Mean of the normal proposal for log(k at 0% B).
+        log_k0_std (float): Standard deviation of that proposal.
+        log_k0_bounds (tuple[float, float]): Accepted log(k at 0% B) range.
+        log_k1_mean (float): Mean of the normal proposal for log(k at 100% B).
+        log_k1_bounds (tuple[float, float]): Accepted log(k at 100% B) range.
+        s_1_relative_std (float): Coefficient of variation of the log-normal S_1 proposal.
+        s_1_bounds (tuple[float, float]): Accepted S_1 value range.
+        s_2_mean (float): Mean of the S_2 proposal..
+        s_2_relative_std (float): Coefficient of variation of the log-normal S_2 proposal.
+        s_2_bounds (tuple[float, float]): Accepted S_2 value range.
+        random_seed (int): Random seed for reproducible sampling.
+        flow_rate (float): Flow rate in mL/min for the separability checks.
+        max_attempts (int): Maximum total candidate draws before reporting an infeasible sampling request.
 
     Returns:
-        AnalyteSet: The sampled set of analytes.
+        AnalyteSet: Sampled analytes satisfying parameter and pairwise separability checks.
     """
     all_isocratic_gradients = [
-        LCGradient(f"{i}", [0, max_run_time], [i / 100, i / 100], 0.4, eluents=("A", "B"))
+        LCGradient(f"{i}", [0, max_run_time], [i / 100, i / 100], flow_rate, eluents=("A", "B"))
         for i in range(101)
     ]
     retention_behavior = np.zeros((num_compounds, len(all_isocratic_gradients), 2))  # elution time, peak width
 
     cmpd_set = AnalyteSet()
     generator = torch.Generator(device="cpu").manual_seed(random_seed)
+    rejections = dict(log_k0=0, S_2=0, S_1=0, log_k1=0, elution=0, resolution=0)
 
-    while len(cmpd_set) < num_compounds:
+    def sample_positive_log_normal(mean: float, relative_std: float) -> float:
+        sigma = np.sqrt(np.log1p(relative_std**2))
+        z = torch.randn((), generator=generator, dtype=torch.float64).item()
+        return float(mean * np.exp(sigma * z - 0.5 * sigma**2))
 
-        log_k0 = torch.normal(
-            torch.tensor(log_k0_mean),
-            torch.tensor(log_k0_std),
-            generator=generator
-        ).item()
+    for _ in range(max_attempts):
 
-        # Validate log_k0 range
-        if not (5.0 <= log_k0 <= 19.0):
+        # sample log_k_0 from the bounded normal distribution
+        log_k0 = log_k0_mean + log_k0_std * torch.randn((), generator=generator, dtype=torch.float64).item()
+        if not log_k0_bounds[0] <= log_k0 <= log_k0_bounds[1]:
+            rejections["log_k0"] += 1
             continue
 
-        # Validate log_k0 distance
-        valid_dist = []
-        for cmpd in cmpd_set:
-            dist, ref_log_k0 = abs(log_k0 - cmpd.log_k0), min(cmpd.log_k0, log_k0)
-            thresh = 2.0 - 1.75 / (1 + torch.exp(-1. * (torch.tensor(ref_log_k0) - log_k0_distance_threshold))).item()
-            valid_dist.append(dist > thresh)
-        if not all(valid_dist):
+        # sample S_2 from the bounded log-normal distribution
+        S_2 = sample_positive_log_normal(s_2_mean, s_2_relative_std)
+        if not s_2_bounds[0] <= S_2 <= s_2_bounds[1]:
+            rejections["S_2"] += 1
             continue
 
-        # Sample S_1 and S_2
-        mean_S_1 = 35.0 + 8.5 * log_k0
-        S_1 = mean_S_1 * torch.normal(
-            torch.tensor(1.0, dtype=torch.float64),
-            torch.tensor(s_1_relative_std, dtype=torch.float64),
-            generator=generator
-        ).item()
-
-        mean_S_2 = 4.05 + 0.19 * log_k0
-        S_2 = mean_S_2 * torch.normal(
-            torch.tensor(1.0, dtype=torch.float64),
-            torch.tensor(s_2_relative_std, dtype=torch.float64),
-            generator=generator
-        ).item()
-
-        if S_2 < 0 or S_1 < 2 * S_2 * (1 + S_2):
+        # sample S_1 from a bounded distribution conditional on the sampled S_1 and S_2 values
+        mean_S_1 = (1 + S_2) * (log_k0 + 2 * np.log1p(S_2) - log_k1_mean)
+        if mean_S_1 <= 0:
+            rejections["S_1"] += 1
+            continue
+        S_1 = sample_positive_log_normal(mean_S_1, s_1_relative_std)
+        if not s_1_bounds[0] <= S_1 <= s_1_bounds[1] or S_1 < 2 * S_2 * (1 + S_2):
+            rejections["S_1"] += 1
+            continue
+        log_k1 = log_k0 + 2 * np.log1p(S_2) - S_1 / (1 + S_2)
+        if not log_k1_bounds[0] <= log_k1 <= log_k1_bounds[1]:
+            rejections["log_k1"] += 1
             continue
 
         area = 20.0 + 30.0 * torch.rand(1, generator=generator, dtype=torch.float64).item()
@@ -113,80 +118,57 @@ def sample_analyte_set(
             retention_behavior[len(cmpd_set), grad_idx, 1] = sigma.item()
 
         # Validate elution time under 100% B
-        if retention_behavior[len(cmpd_set), -1, 0] > 0.5 * max_run_time:
+        if not np.all(np.isfinite(retention_behavior[len(cmpd_set), -1])) or retention_behavior[len(cmpd_set), -1, 0] > 0.5 * max_run_time:
+            rejections["elution"] += 1
             continue
 
         # Validate resolution against existing compounds
         valid_resolution = []
         for existing_idx in range(len(cmpd_set)):
-            diff = retention_behavior[len(cmpd_set), :, 0] - retention_behavior[existing_idx, :, 0]
+            with np.errstate(invalid="ignore"):
+                diff = retention_behavior[len(cmpd_set), :, 0] - retention_behavior[existing_idx, :, 0]
             denom = 2 * (retention_behavior[len(cmpd_set), :, 1] + retention_behavior[existing_idx, :, 1])
             resolutions = np.abs(diff) / denom
             valid = (resolutions > 1.5) & (retention_behavior[len(cmpd_set), :, 0] < 0.5 * max_run_time) & (retention_behavior[existing_idx, :, 0] < 0.5 * max_run_time)
             valid_resolution.append(np.any(valid))
         if not all(valid_resolution):
+            rejections["resolution"] += 1
             continue
 
         # If all criteria are met, add the compound
         cmpd_set.append(temp_cmpd)
+        if len(cmpd_set) == num_compounds:
+            return cmpd_set
 
-    return cmpd_set
+    raise RuntimeError(f"Only sampled {len(cmpd_set)} of {num_compounds} analytes after {max_attempts} attempts. Rejections: {rejections}")
 
 
 def test_separability(
         cmpd_set: AnalyteSet,
         simulator: Simulator,
         config: HPLCOptimizationConfig,
-        max_random_performance: float = 2.0,
-        min_total_performance: float = 2.0
-) -> tuple[float, float]:
+        num_gradients: int = 10000
+) -> np.ndarray:
     """
-    Test the separability of the given compound set using the provided configuration using random gradients:
-      - budget = 100  (random separatability)
-      - budget = 10000 (general separability)
+    Test the separability of the given compound set using 10,000 random gradients and return the performance scores.
 
     Args:
         cmpd_set (AnalyteSet): The set of analytes to test.
         simulator (Simulator): The HPLC experiment emulator to simulate experiments.
         config (HPLCOptimizationConfig): The configuration for the optimization benchmark.
-        max_random_performance (float): The maximum acceptable performance score for random gradients.
-        min_total_performance (float): The minimum acceptable performance score for the best gradients.
+        num_gradients (int): The number of random gradients to generate and test.
 
     Returns:
-        float: The performance score for the best gradients from 100 random gradients.
-        float: The performance score for the best gradients from 10,000 random gradients.
+        np.ndarray: An array of performance scores for each of the 10,000 random gradients.
     """
-    config.budget = 100
-    config.seed_budget = 100
-    gradients_rand = generate_seed_experiments(config=config, random_seed=42)
-    score_rand = float('-inf')
-
-    for grad in gradients_rand:
-
-        experiment = run_simulation_experiment(
-            simulator=simulator,
-            compound_set=cmpd_set,
-            gradient=grad,
-            resolution_threshold=config.resolution_threshold,
-            advanced_peak_detection=config.advanced_peak_detection,
-            fidelity_level=1.0,
-        )
-        experiment.segment_based = config.segment_based
-        experiment.score = config.calculate_experiment_score(experiment)
-
-        if experiment.score > score_rand:
-            score_rand = experiment.score
-
-    if score_rand > max_random_performance:
-        return score_rand, float("inf")
-
-    ################################################################################
-    config.budget = 10000
-    config.seed_budget = 10000
+    config = copy.deepcopy(config)
+    config.budget = num_gradients
+    config.seed_budget = num_gradients
     gradients = generate_seed_experiments(config=config, random_seed=42)
-    optimum_score = float('-inf')
 
-    for grad in gradients:
+    scores = np.empty(len(gradients), dtype=np.float32)
+
+    for idx, grad in enumerate(gradients):
 
         experiment = run_simulation_experiment(
             simulator=simulator,
@@ -197,82 +179,98 @@ def test_separability(
             fidelity_level=1.0,
         )
         experiment.segment_based = config.segment_based
-        experiment.score = config.calculate_experiment_score(experiment)
+        scores[idx] = config.calculate_experiment_score(experiment)
 
-        if experiment.score > optimum_score:
-            optimum_score = experiment.score
-
-        if optimum_score >= min_total_performance:
-            break
-
-    return score_rand, optimum_score
+    return scores
 
 
 if __name__ == "__main__":
 
-    NUM_COMPOUND_SETS = (5, )
-    NUM_COMPOUNDS = (10, )
-    MAX_RUN_TIMES = (20, )
+    VERBOSE = True
+    NUM_COMPOUND_SETS = 1000
+    NUM_COMPOUND_SETS_TO_KEEP = 50
+    NUM_COMPOUNDS = (5, 10, 15, 20, 25)
+    MAX_RUN_TIMES = (10, 20, 30, 45, 60)
 
-    MAX_RANDOM_PERFORMANCE = 1.8
-    MIN_TOTAL_PERFORMANCE = 2.2
+    NUM_GRADIENTS = 10000
+    BUDGET = 100
+    PERFORMANCE_THRESHOLD = 2.2
+
+    parser = argparse.ArgumentParser(description="Generate analyte sets for HPLC optimization benchmarks.")
+    parser.add_argument("--num_compounds", type=int, help="Numbers of compounds to sample.")
+    parser.add_argument("--max_run_time", type=int, help="Maximum run time for the HPLC experiment in minutes.")
+    args = parser.parse_args()
+    num_cmpds, max_run_time = args.num_compounds, args.max_run_time
 
     config_file = Path.cwd() / "configs" / "simulator_config.json"
 
     with open(config_file, "r") as f:
         simulator = Simulator(**json.load(f))
 
-    for num_cmpd_sets in NUM_COMPOUND_SETS:
-        for num_cmpds in NUM_COMPOUNDS:
+    stats = []
 
-            for max_run_time in MAX_RUN_TIMES:
+    grad_config = HPLCOptimizationConfig(
+        num_compounds=num_cmpds,
+        num_segments=5,
+        min_segment_length=0.5,
+        max_run_time=max_run_time,
+        flow_rate=0.4,
+        advanced_peak_detection=True,
+        seed_strategy="random"
+    )
 
-                grad_config = HPLCOptimizationConfig(
-                    num_compounds=num_cmpds,
-                    num_segments=5,
-                    min_segment_length=0.5,
-                    max_run_time=max_run_time,
-                    flow_rate=0.4,
-                    advanced_peak_detection=True,
-                    seed_strategy="random"
-                )
+    cmpd_sets_to_keep = []
+    seed = 0
+    too_easy, too_difficult = 0, 0
 
-                cmpd_sets, seed, too_easy, too_difficult = [], 0, 0, 0
-                pbar = tqdm(total=num_cmpd_sets, desc=f"Generating {num_cmpd_sets} sets of {num_cmpds} compounds")
+    pbar = tqdm(total=NUM_COMPOUND_SETS, desc=f"Sampling {NUM_COMPOUND_SETS} sets of {num_cmpds} compounds for {max_run_time} min run time")
 
-                while len(cmpd_sets) < num_cmpd_sets:
+    for cmpd_set_idx in range(NUM_COMPOUND_SETS):
 
-                    pbar.set_postfix({"Accepted": len(cmpd_sets), "Too Easy": too_easy, "Too Difficult": too_difficult})
-                    seed += 1
+        pbar.set_postfix({"Accepted": len(cmpd_sets_to_keep), "Too Easy": too_easy, "Too Difficult": too_difficult})
+        seed += 1
 
-                    cmpd_set = sample_analyte_set(
-                        num_compounds=num_cmpds,
-                        ref_simulator=simulator,
-                        max_run_time=max_run_time,
-                        random_seed=seed
-                    )
+        try:
+            cmpd_set = sample_analyte_set(
+                num_compounds=num_cmpds,
+                ref_simulator=simulator,
+                max_run_time=max_run_time,
+                random_seed=seed
+            )
+            scores = test_separability(cmpd_set, simulator, grad_config, num_gradients=NUM_GRADIENTS)
+            stats.append(scores)
 
-                    random_sep, sep = test_separability(cmpd_set, simulator, grad_config, MAX_RANDOM_PERFORMANCE, MIN_TOTAL_PERFORMANCE)
+        except RuntimeError as e:
+            print(f"Failed to sample compound set {cmpd_set_idx + 1}: {e}")
+            stats.append(np.full(NUM_GRADIENTS, np.nan, dtype=np.float32))
+            pbar.update(1)
+            continue
 
-                    if random_sep > MAX_RANDOM_PERFORMANCE:
-                        too_easy += 1
-                        continue
-                    elif sep < MIN_TOTAL_PERFORMANCE:
-                        too_difficult += 1
-                        continue
-                    else:
-                        cmpd_sets.append(cmpd_set)
-                        pbar.update(1)
+        if len(cmpd_sets_to_keep) < NUM_COMPOUND_SETS_TO_KEEP:
+            if np.all(scores < PERFORMANCE_THRESHOLD):
+                too_difficult += 1
+                pbar.update(1)
+                continue
+            if np.sum(scores > PERFORMANCE_THRESHOLD) > NUM_GRADIENTS / BUDGET:
+                too_easy += 1
+                pbar.update(1)
+                continue
+            cmpd_sets_to_keep.append(cmpd_set)
 
-                pbar.close()
+    pbar.close()
 
-                hash_val = hash(tuple(cmpd_sets)) % (10 ** 6)
+    stats = np.array(stats)
 
-                data_dir = Path.cwd() / "compound_sets" / f"{num_cmpd_sets}x{num_cmpds}C_{max_run_time}min_{hash_val}"
-                data_dir.mkdir(parents=True, exist_ok=True)
+    # Store the generated compound sets
 
-                for idx, cmpd_set in enumerate(cmpd_sets):
-                    file_path = data_dir / f"compound_set_{idx}.json"
-                    cmpd_set.to_json(file_path)
+    hash_val = hash(tuple(cmpd_sets_to_keep)) % (10 ** 6)
+    data_dir = Path.cwd() / "compound_sets" / f"{len(cmpd_sets_to_keep)}x{num_cmpds}C_{max_run_time}min_{hash_val}"
+    data_dir.mkdir(parents=True, exist_ok=True)
 
-                print(f"Created compound set '{data_dir.name}.")
+    for idx, cmpd_set in enumerate(cmpd_sets_to_keep):
+        file_path = data_dir / f"compound_set_{idx}.json"
+        cmpd_set.to_json(file_path)
+
+    print(f"Created compound set '{data_dir.name}.")
+
+    np.savez(data_dir / "compound_set_stats.npz", stats=stats, too_easy=too_easy, too_difficult=too_difficult)
