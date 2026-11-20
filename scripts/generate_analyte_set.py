@@ -186,11 +186,8 @@ def test_separability(
 
 if __name__ == "__main__":
 
-    VERBOSE = True
     NUM_COMPOUND_SETS = 500
     NUM_COMPOUND_SETS_TO_KEEP = 50
-    NUM_COMPOUNDS = (5, 10, 15, 20, 25)
-    MAX_RUN_TIMES = (10, 20, 30, 45, 60)
 
     NUM_GRADIENTS = 10000
     BUDGET = 100
@@ -199,11 +196,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate analyte sets for HPLC optimization benchmarks.")
     parser.add_argument("--num_compounds", type=int, help="Numbers of compounds to sample.")
     parser.add_argument("--max_run_time", type=int, help="Maximum run time for the HPLC experiment in minutes.")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output.")
     args = parser.parse_args()
-    num_cmpds, max_run_time = args.num_compounds, args.max_run_time
+    num_cmpds, max_run_time, verbose = args.num_compounds, args.max_run_time, args.verbose
 
-    config_file = Path.cwd() / "configs" / "simulator_config.json"
-
+    config_file = Path(__file__).parent / "configs" / "simulator_config.json"
     with open(config_file, "r") as f:
         simulator = Simulator(**json.load(f))
 
@@ -223,7 +220,7 @@ if __name__ == "__main__":
     seed = 0
     too_easy, too_difficult = 0, 0
 
-    pbar = tqdm(total=NUM_COMPOUND_SETS, desc=f"Sampling {NUM_COMPOUND_SETS} sets of {num_cmpds} compounds for {max_run_time} min run time")
+    pbar = tqdm(total=NUM_COMPOUND_SETS, desc=f"Sampling {NUM_COMPOUND_SETS} sets of {num_cmpds} compounds for {max_run_time} min run time", disable=not verbose)
 
     for cmpd_set_idx in range(NUM_COMPOUND_SETS):
 
@@ -237,6 +234,7 @@ if __name__ == "__main__":
                 max_run_time=max_run_time,
                 random_seed=seed
             )
+            print(f"Sampled compound set {cmpd_set_idx + 1} / {NUM_COMPOUND_SETS}.")
             scores = test_separability(cmpd_set, simulator, grad_config, num_gradients=NUM_GRADIENTS)
             stats.append(scores)
 
@@ -247,17 +245,19 @@ if __name__ == "__main__":
             continue
 
         if len(cmpd_sets_to_keep) < NUM_COMPOUND_SETS_TO_KEEP:
-            if np.all(scores < PERFORMANCE_THRESHOLD):
+            separated = np.count_nonzero(np.isfinite(scores) & (scores >= PERFORMANCE_THRESHOLD))
+            if separated == 0:
                 too_difficult += 1
                 pbar.update(1)
                 continue
-            if np.sum(scores > PERFORMANCE_THRESHOLD) > NUM_GRADIENTS / BUDGET:
+            if separated > NUM_GRADIENTS / BUDGET:
                 too_easy += 1
                 pbar.update(1)
                 continue
             cmpd_sets_to_keep.append(cmpd_set)
 
     pbar.close()
+    print(f"Finished sampling. Accepted {len(cmpd_sets_to_keep)} compound sets, {too_easy} too easy, {too_difficult} too difficult.")
 
     stats = np.array(stats)
 
@@ -270,7 +270,5 @@ if __name__ == "__main__":
     for idx, cmpd_set in enumerate(cmpd_sets_to_keep):
         file_path = data_dir / f"compound_set_{idx}.json"
         cmpd_set.to_json(file_path)
-
-    print(f"Created compound set '{data_dir.name}.")
 
     np.savez(data_dir / "compound_set_stats.npz", stats=stats, too_easy=too_easy, too_difficult=too_difficult)
