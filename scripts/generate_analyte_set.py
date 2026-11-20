@@ -187,7 +187,7 @@ def test_separability(
 if __name__ == "__main__":
 
     VERBOSE = True
-    NUM_COMPOUND_SETS = 1000
+    NUM_COMPOUND_SETS = 500
     NUM_COMPOUND_SETS_TO_KEEP = 50
     NUM_COMPOUNDS = (5, 10, 15, 20, 25)
     MAX_RUN_TIMES = (10, 20, 30, 45, 60)
