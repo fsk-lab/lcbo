@@ -73,7 +73,7 @@ def run_simulation_experiment(
         observed = np.full((len(compounds), 4), np.nan)
         available = set(valid_indices)
 
-        for peak, resolution in zip(peaks, peak.peak_resolutions(None, fitted=False)):
+        for peak, resolution in zip(peaks, peaks.peak_resolutions(None, fitted=False)):
             candidates = [i for i in available if peak.start_time <= retention_times[i] <= peak.end_time]
             idx = min(candidates, key=lambda i: abs(retention_times[i] - peak.peak_time), default=None)
             if idx is not None:

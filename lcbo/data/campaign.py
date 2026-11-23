@@ -3,6 +3,10 @@ from pathlib import Path
 import pickle
 import numpy as np
 
+from moses.simulator import Simulator
+from lcbo.hplc_utils.analyte import AnalyteSet
+from lcbo.hplc_utils.retention_prediction_error import retention_prediction_error
+
 from lcbo.hplc_utils.hplc_experiment import HPLCExperiment
 from lcbo.data.config import HPLCOptimizationConfig, HPLCOptimizationBenchmarkConfig
 
@@ -10,11 +14,22 @@ from lcbo.data.config import HPLCOptimizationConfig, HPLCOptimizationBenchmarkCo
 class HPLCOptimizationCampaign(object):
     """
     Class to manage a campaign of HPLC experiments, storing and analyzing multiple experiments.
+
+    Args:
+        config (HPLCOptimizationConfig): Configuration for the HPLC optimization campaign.
+        experiments (list[HPLCExperiment], optional): List of HPLCExperiments (simulations or measured) in the campaign.
+        retention_model_state (dict, optional): State of the retention model, if applicable.
     """
 
-    def __init__(self, config: HPLCOptimizationConfig, experiments: Optional[list[HPLCExperiment]] = None):
+    def __init__(
+            self,
+            config: HPLCOptimizationConfig,
+            experiments: Optional[list[HPLCExperiment]] = None,
+            retention_model_state: Optional[dict] = None
+    ):
         self.config = config
         self.experiments = experiments if experiments is not None else []
+        self.retention_model_state = retention_model_state
 
     def append(self, experiment: HPLCExperiment):
         if experiment.num_compounds != self.config.num_compounds:
@@ -33,7 +48,7 @@ class HPLCOptimizationCampaign(object):
 
     def experiments_above_fidelity(self, fidelity_threshold: float) -> list[HPLCExperiment]:
         """
-        Returns a list of experiments with fidelity level greater than or equal to the specified threshold.
+        Returns experiments above the fidelity threshold, using only simulations from the current fit.
 
         Args:
             fidelity_threshold (float): The fidelity level threshold.
@@ -99,7 +114,22 @@ class HPLCOptimizationCampaign(object):
             params.append(exp.gradient_parameters.parameters.reshape(1, -1))
             fidelities.append(exp.fidelity_level)
 
+        if not params:
+            return np.empty((0, self.config.num_optimization_variables)), np.empty((0, 1))
         return np.concatenate(params, axis=0), np.array(fidelities).reshape(-1, 1)
+
+    def get_gradient_run_times(self, fidelity_threshold: float = 1.0) -> np.ndarray:
+        """
+        Returns an array of gradient run times from all experiments in the campaign.
+
+        Args:
+            fidelity_threshold (float): Includes all experiments with fidelity level >= this threshold.
+
+        Returns:
+            np.ndarray: Array of gradient run times (shape: (num_experiments, 1)).
+        """
+        experiments = self.experiments_above_fidelity(fidelity_threshold)
+        return np.array([exp.gradient.run_time for exp in experiments]).reshape(-1, 1)
 
     def get_retention_times(self, fidelity_threshold: float = 1.0) -> np.ndarray:
         """
@@ -113,6 +143,19 @@ class HPLCOptimizationCampaign(object):
         """
         experiments = self.experiments_above_fidelity(fidelity_threshold)
         return np.array([exp.retention_times for exp in experiments])
+
+    def get_peak_fwhms(self, fidelity_threshold: float = 1.0) -> np.ndarray:
+        """
+        Returns an array of compound-wise peak widths from all experiments in the campaign.
+
+        Args:
+            fidelity_threshold (float): Includes all experiments with fidelity level >= this threshold.
+
+        Returns:
+            np.ndarray: Array of peak widths (shape: (num_experiments, num_compounds)).
+        """
+        experiments = self.experiments_above_fidelity(fidelity_threshold)
+        return np.array([exp.fwhms for exp in experiments])
 
     def get_num_peaks(self, fidelity_threshold: float = 1.0) -> np.ndarray:
         """
@@ -137,7 +180,7 @@ class HPLCOptimizationCampaign(object):
             np.ndarray: Array of maximum number of peaks up to each experiment (shape: (num_experiments, 1)).
         """
         _, indices = self.score_trajectory
-        return self.get_num_peaks(fidelity_threshold=1.0)[indices]
+        return self.get_num_peaks(fidelity_threshold=1.0)[indices.flatten()]
 
     def get_critical_resolutions(self, fidelity_threshold: float = 1.0) -> np.ndarray:
         """
@@ -162,7 +205,7 @@ class HPLCOptimizationCampaign(object):
             np.ndarray: Array of maximum critical resolutions up to each experiment (shape: (num_experiments, 1)).
         """
         _, indices = self.score_trajectory
-        return self.get_critical_resolutions(fidelity_threshold=1.0)[indices]
+        return self.get_critical_resolutions(fidelity_threshold=1.0)[indices.flatten()]
 
     def get_num_resolved_peaks(self, fidelity_threshold: float = 1.0) -> np.ndarray:
         """
@@ -188,7 +231,7 @@ class HPLCOptimizationCampaign(object):
             np.ndarray: Array of maximum number of resolved peaks up to each experiment (shape: (num_experiments, 1)).
         """
         _, indices = self.score_trajectory
-        return self.get_num_resolved_peaks(fidelity_threshold=1.0)[indices]
+        return self.get_num_resolved_peaks(fidelity_threshold=1.0)[indices.flatten()]
 
     def get_single_compound_elution(self, compound_idx: int, fidelity_threshold: float = 1.0) -> np.ndarray:
         """
@@ -219,7 +262,7 @@ class HPLCOptimizationCampaign(object):
                         (shape: (num_experiments, 1)).
         """
         _, indices = self.score_trajectory
-        return self.get_single_compound_elution(compound_idx=compound_idx, fidelity_threshold=1.0)[indices]
+        return self.get_single_compound_elution(compound_idx=compound_idx, fidelity_threshold=1.0)[indices.flatten()]
 
     def get_single_compound_resolutions(self, compound_idx: int, fidelity_threshold: float = 1.0) -> np.ndarray:
         """
@@ -250,7 +293,7 @@ class HPLCOptimizationCampaign(object):
                         (shape: (num_experiments, 1)).
         """
         _, indices = self.score_trajectory
-        return self.get_single_compound_resolutions(compound_idx=compound_idx, fidelity_threshold=1.0)[indices]
+        return self.get_single_compound_resolutions(compound_idx=compound_idx, fidelity_threshold=1.0)[indices.flatten()]
 
     def get_run_times(self, fidelity_threshold: float = 1.0) -> np.ndarray:
         """
@@ -275,27 +318,55 @@ class HPLCOptimizationCampaign(object):
             np.ndarray: Array of run times at the best experiments up to each experiment (shape: (num_experiments,)).
         """
         _, indices = self.score_trajectory
-        return self.get_run_times(fidelity_threshold=1.0)[indices]
+        return self.get_run_times(fidelity_threshold=1.0)[indices.flatten()]
 
     @property
     def expected_fidelity_level(self) -> float:
         """
-        Returns the expected fidelity level of a simulator trained on all experimental data in the campaign. Uses
-        an exponential decay model based on the parameters `max_simulation_fidelity` and `simulation_fidelity_decay`
-        from the campaign config.
+        Returns the expected fidelity level of the fitted simulator. The prediction_error strategy evaluates the
+        current fit on all measured gradients and uses the resulting in-sample retention error. The experiment_count
+        strategy uses an exponential saturation model.
 
         s = max_simulation_fidelity * (1 - exp(-simulation_fidelity_decay * n_hf))
 
         where n_hf is the number of high-fidelity experiments in the campaign.
 
         Returns:
-            float: Expected fidelity level (1.0 for single-fidelity, else as per config).
+            float: Expected simulation fidelity for a multi-fidelity campaign.
         """
         if self.config.single_fidelity:
             raise ValueError("Expected fidelity level is not defined for single-fidelity campaigns.")
 
-        n_hf = self.num_high_fidelity_experiments
-        return self.config.max_simulation_fidelity * (1 - np.exp(-self.config.simulation_fidelity_decay * n_hf))
+        if self.config.fidelity_strategy == "prediction_error":
+            experiments = self.high_fidelity_experiments
+            if not experiments or self.retention_model_state is None:
+                return 0.0
+
+            from lcbo.routines.experiment import run_simulation_experiment
+
+            simulator = Simulator(**self.retention_model_state["simulator"])
+            compounds = AnalyteSet.from_dicts(self.retention_model_state["compounds"])
+            errors = []
+            for observed in experiments:
+                predicted = run_simulation_experiment(
+                    simulator, compounds, observed.gradient, advanced_peak_detection=self.config.advanced_peak_detection
+                )
+                error = retention_prediction_error(predicted, observed)
+                if error is not None and np.isfinite(error):
+                    errors.append(error)
+
+            if not errors:
+                return 0.0
+
+            rms_error = np.sqrt(np.mean(np.square(errors)))
+            return float(self.config.max_simulation_fidelity * np.exp(-rms_error / self.config.retention_error_scale))
+
+        elif self.config.fidelity_strategy == "experiment_count":
+            n_hf = self.num_high_fidelity_experiments
+            return self.config.max_simulation_fidelity * (1 - np.exp(-self.config.simulation_fidelity_decay * n_hf))
+
+        else:
+            raise ValueError(f"Unknown fidelity strategy: {self.config.fidelity_strategy}")
 
     @property
     def optimum_experiment(self) -> HPLCExperiment:
@@ -311,14 +382,15 @@ class HPLCOptimizationCampaign(object):
     def to_dict(self) -> dict:
         return {
             "config": self.config.to_dict(),
-            "experiments": [exp.to_dict() for exp in self.experiments]
+            "experiments": [exp.to_dict() for exp in self.experiments],
+            "retention_model_state": self.retention_model_state
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "HPLCOptimizationCampaign":
         config = HPLCOptimizationConfig.from_dict(data["config"])
         experiments = [HPLCExperiment.from_dict(exp_data) for exp_data in data["experiments"]]
-        return cls(config=config, experiments=experiments)
+        return cls(config=config, experiments=experiments, retention_model_state=data.get("retention_model_state"))
 
     def to_pkl(self, file: Path) -> None:
         with open(file, "wb") as f:
@@ -539,6 +611,3 @@ class HPLCOptimizationBenchmark(object):
             data = pickle.load(f)
 
         return cls.from_dict(data)
-
-
-

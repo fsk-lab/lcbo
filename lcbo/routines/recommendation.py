@@ -20,7 +20,7 @@ from ..bo_utils.random import sample_from_polytope
 from .experiment import run_experiment, run_simulation_experiment
 from .initial_experiments import generate_seed_experiments
 from .bayesian_optimization import recommend_bayesian_optimization
-from .retention_modeling_optimization import recommend_retention_modeling, prediction_errors
+from .retention_modeling_optimization import recommend_retention_modeling
 
 
 def recommend_next_eluent_program(
@@ -241,14 +241,6 @@ def run_optimization_campaign(
                     data_dir=data_dir / f"Experiment_{campaign.num_high_fidelity_experiments + 1}",
                     pre_flush=True
                 )
-            if lf_simulator is not None:
-                predicted = run_simulation_experiment(
-                    simulator=lf_simulator,
-                    compound_set=lf_compounds_fitted,
-                    gradient=next_eluent_program,
-                    advanced_peak_detection=optimization_config.advanced_peak_detection
-                )
-                experiment.retention_prediction_error, experiment.width_prediction_error = prediction_errors(predicted, experiment)
             current_lf_count = 0
         else:
             experiment = run_simulation_experiment(
