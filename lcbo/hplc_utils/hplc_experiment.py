@@ -31,12 +31,23 @@ class HPLCExperiment:
     segment_based: bool = False
 
     @property
+    def detected(self) -> np.ndarray:
+        """
+        Returns a Boolean mask indicating which compounds were detected (i.e. have finite retention times, FWHMs, and
+        peak areas) in the experiment.
+        """
+        retention_time_mask = np.isfinite(self.retention_times) & (self.retention_times > 0)
+        fwhm_mask = np.isfinite(self.fwhms) & (self.fwhms > 0)
+        peak_area_mask = np.isfinite(self.peak_areas) & (self.peak_areas > 0)
+        return retention_time_mask & fwhm_mask & peak_area_mask
+
+    @property
     def gradient_parameters(self) -> LCGradientParameters:
         return LCGradientParameters.from_gradient(self.gradient, segment_based=self.segment_based)
 
     @property
     def high_fidelity(self) -> bool:
-        return self.fidelity_level >= 0.99
+        return self.fidelity_level >= 1.0 - 1E-9
 
     def single_peak_elution_resolution(self, peak_idx: int) -> tuple[float, float]:
         """
@@ -45,8 +56,12 @@ class HPLCExperiment:
 
         Args:
             peak_idx (int): The index of the peak to evaluate.
+
+        Returns:
+            float: 1.0 if the peak is detected (eluted), 0.0 otherwise.
+            float: The resolution of the peak if detected and finite, 0.0 otherwise.
         """
-        if np.isfinite(self.retention_times[peak_idx]) and np.isfinite(self.fwhms[peak_idx]):
+        if self.detected[peak_idx]:
             resolution = self.peak_resolutions[peak_idx]
             return 1.0, resolution.item() if np.isfinite(resolution) else 0.0
         else:
@@ -54,15 +69,15 @@ class HPLCExperiment:
 
     @property
     def num_peaks(self) -> int:
-        return int(np.sum(np.isfinite(self.retention_times) & np.isfinite(self.fwhms)))
+        return int(self.detected.sum())
 
     def num_resolved_peaks(self, resolution_threshold: float = 1.5) -> int:
-        real_resolutions = self.peak_resolutions[np.isfinite(self.peak_resolutions)]
+        real_resolutions = self.peak_resolutions[self.detected & np.isfinite(self.peak_resolutions)]
         return int((real_resolutions >= resolution_threshold).sum())
 
     @property
     def critical_resolution(self) -> float:
-        real_resolutions = self.peak_resolutions[np.isfinite(self.peak_resolutions)]
+        real_resolutions = self.peak_resolutions[self.detected & np.isfinite(self.peak_resolutions)]
         if len(real_resolutions) == 0:
             return 0.0
         return float(real_resolutions.min())

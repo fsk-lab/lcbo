@@ -1,208 +1,318 @@
-from typing import Optional
+from typing import Optional, Literal
 import numpy as np
 import torch
 
-from botorch.models.model import Model
-from botorch.models import SingleTaskGP, SingleTaskMultiFidelityGP, ModelListGP, ModelList
-from botorch.models.transforms import Standardize, Normalize
 from botorch.fit import fit_gpytorch_mll
+from botorch.models import ModelList, SingleTaskGP, SingleTaskMultiFidelityGP
+from botorch.models.model import Model
+from botorch.models.transforms import Normalize, Standardize
+from botorch.posteriors import Posterior
+from botorch.posteriors.gpytorch import GPyTorchPosterior
+from gpytorch.distributions import MultivariateNormal
 from gpytorch.mlls import ExactMarginalLogLikelihood
-from laplace_bayesopt.botorch import LaplaceBoTorch
 
 from ..data.config import HPLCOptimizationConfig
+from .laplace import LastLayerLaplaceModel
+from .censoring import train_censored_gp_model, train_censored_nn_model
 
 
 class FixedFidelitySurrogate(Model):
     """
-    A wrapper class for surrogate models that enforces a fixed fidelity level during posterior predictions. This is
-    useful in multi-fidelity optimization scenarios where predictions need to be made at a specific fidelity level, and
-    is numerically more stable than using FixedFeatureAcquisitionFunction from BoTorch.
-    """
-    def __init__(
-            self,
-            base_model: Model,
-            fixed_fidelity: float | torch.Tensor,
-            fidelity_index: int
-    ):
+    Exposes a multi-fidelity surrogate at a fixed fidelity for acquisition optimization. This is more efficient than
+    botorch's `FixedFidelityAcquisitionFunction`.
 
+    Args:
+        base_model (Model): The multi-fidelity surrogate model to wrap.
+        fixed_fidelity (float | torch.Tensor): The fidelity value to fix for acquisition optimization.
+        fidelity_index (int): The index of the fidelity dimension in the input space.
+    """
+
+    def __init__(self, base_model: Model, fixed_fidelity: float | torch.Tensor, fidelity_index: int) -> None:
         super().__init__()
         self.base_model = base_model
-        if isinstance(fixed_fidelity, float):
-            fixed_fidelity = torch.tensor(fixed_fidelity, dtype=torch.get_default_dtype())
         self.register_buffer("fixed_fidelity", torch.as_tensor(fixed_fidelity))
         self.fidelity_index = fidelity_index
 
     @property
     def num_outputs(self) -> int:
         """
-        Exposes the output count to acquisition functions.
+        Returns the number of outputs of the wrapped surrogate.
         """
         return self.base_model.num_outputs
 
-    def posterior(self, X: torch.Tensor, **kwargs):
+    def posterior(self, X: torch.Tensor, **kwargs) -> Posterior:
         """
-        Generate posterior predictions at the fixed fidelity level.
+        Evaluates the posterior of the wrapped surrogate at the fixed fidelity for the given input points.
 
         Args:
-            X (torch.Tensor): Input data for which to generate posterior predictions.
-            **kwargs: Additional keyword arguments passed to the base model's posterior method.
-
-        Returns:
-            Posterior: The posterior predictions from the base model at the fixed fidelity level.
+            X (torch.Tensor): The input points at which to evaluate the posterior. Shape: (batch_size, n_features).
+            **kwargs: Additional keyword arguments to pass to the base model's posterior method.
         """
-        fixed_fidelity_column = self.fixed_fidelity.to(X).expand(*X.shape[:-1], 1)
-        X_fixed = torch.cat(
-            [
-                X[..., :self.fidelity_index],
-                fixed_fidelity_column,
-                X[..., self.fidelity_index:]
-            ],
-            dim=-1
-        )
-        return self.base_model.posterior(X_fixed, **kwargs)
+        fidelity = self.fixed_fidelity.to(X).expand(*X.shape[:-1], 1)
+        X_with_fid = torch.cat([X[..., :self.fidelity_index], fidelity, X[..., self.fidelity_index:]], dim=-1)
+        return self.base_model.posterior(X_with_fid, **kwargs)
+
+
+class DefaultValueModel(Model):
+    """
+    A surrogate model that returns a fixed default value for all inputs. This is used when no finite observations are
+    available for a particular output, but a default value is desired.
+
+    Args:
+        default_value (float): The default value to return for all inputs.
+    """
+
+    num_outputs = 1
+    batch_shape = torch.Size()
+
+    def __init__(self, default_value: float) -> None:
+        super().__init__()
+        self.register_buffer("default_value", torch.as_tensor(default_value))
+
+    def posterior(self, X: torch.Tensor, **kwargs) -> GPyTorchPosterior:
+        """
+        Returns a posterior with a fixed mean and a small covariance for the given input points.
+        """
+        mean = X.new_full(X.shape[:-1], self.default_value)
+        covariance = 1E-8 * torch.eye(X.shape[-2], dtype=X.dtype, device=X.device).expand(*mean.shape[:-1], -1, -1)
+        return GPyTorchPosterior(MultivariateNormal(mean, covariance))
 
 
 def train_surrogate_model(
         config: HPLCOptimizationConfig,
         train_x: np.ndarray,
         train_y: np.ndarray,
-        train_fidelities: Optional[np.ndarray] = None
+        train_fidelities: Optional[np.ndarray] = None,
+        retention_run_times: Optional[np.ndarray] = None,
+        default_value: Optional[float] = None,
 ) -> Model:
     """
-    Train a surrogate model based on the provided training data and optimization configuration.
+    Fit a surrogate to the campaign inputs and targets.
 
     Args:
-        config (HPLCOptimizationConfig): The optimization configuration containing model settings.
-        train_x (np.ndarray): The input features for training the surrogate model.
-        train_y (np.ndarray): The target values for training the surrogate model.
-        train_fidelities (Optional[np.ndarray], optional): Fidelity levels for multi-fidelity models. Defaults to None.
-
-    Returns:
-        Model: The trained surrogate model.
+        config (HPLCOptimizationConfig): The configuration for the HPLC optimization.
+        train_x (np.ndarray): The training inputs (gradient parameters). Shape: (n_samples, n_features).
+        train_y (np.ndarray): The training targets (objective values). Shape: (n_samples, n_outputs).
+        train_fidelities (Optional[np.ndarray]): The training fidelities for multi-fidelity models. Shape:
+                                                 (n_samples, 1). Required if config.multi_fidelity is True.
+        retention_run_times (Optional[np.ndarray]): The run times for censored regression of retention times. Shape:
+                                                    (n_samples,) or (n_samples, 1).
+        default_value (Optional[float]): The default value to use for outputs with no finite observations. If None,
+                                         the model will raise an error for outputs with no finite observations.
     """
-    train_x = torch.tensor(train_x, dtype=torch.get_default_dtype())
-    train_y = torch.tensor(train_y, dtype=torch.get_default_dtype())
+    x = torch.tensor(train_x, dtype=torch.get_default_dtype())
+    y = torch.tensor(train_y, dtype=torch.get_default_dtype())
+    bounds = config.bounds
+    f = None
+    if config.multi_fidelity:
+        if train_fidelities is None:
+            raise ValueError("Training fidelities are required for multi-fidelity models.")
+        f = torch.tensor(train_fidelities, dtype=torch.get_default_dtype()).reshape(-1, 1)
+    t = x.new_tensor(retention_run_times).reshape(-1) if retention_run_times is not None else None
 
-    if config.single_fidelity:
-        train_inputs = train_x
-        bounds = config.bounds
-    else:
-        train_fidelities = torch.tensor(train_fidelities, dtype=torch.get_default_dtype())
-        train_inputs = torch.cat([train_x, train_fidelities], dim=-1)
-        bounds = torch.cat([config.bounds, torch.tensor([[0.], [1.]])], dim=-1)
-
+    retention_settings = {"miss_probability": config.retention_miss_probability, "observation_sigma": config.retention_observation_sigma}
     if config.surrogate_model == "GP":
-        model = train_gp_surrogate(config, train_inputs, train_y, bounds)
-    elif config.surrogate_model in ("NN", "DNN", "WDNN", "NNLT"):
-        model = train_nn_surrogate(config, train_inputs, train_y, bounds)
-    else:
-        raise ValueError(f"Unsupported surrogate model type: {config.surrogate_model}")
-
-    return model
+        return train_gp_surrogate(x, y, bounds, f, t, default_value=default_value, **retention_settings)
+    if config.surrogate_model in ("NN", "DNN"):
+        return train_nn_surrogate(x, y, bounds, f, t, architecture=config.surrogate_model, default_value=default_value, **retention_settings)
+    raise ValueError(f"Unsupported surrogate model type: {config.surrogate_model}")
 
 
 def train_gp_surrogate(
-        config: HPLCOptimizationConfig,
         x: torch.Tensor,
         y: torch.Tensor,
-        bounds: torch.Tensor
+        bounds: torch.Tensor,
+        f: Optional[torch.Tensor] = None,
+        t: Optional[torch.Tensor] = None,
+        default_value: Optional[float] = None,
+        miss_probability: float = 0.05,
+        observation_sigma: float = 0.25,
 ) -> Model:
     """
-    Trains a botorch.model.SingleTaskGP model on the input data.
+    Fits a Gaussian Process surrogate model to the provided training data.
 
     Args:
-        config: HPLCOptimizationConfig: The optimization configuration.
-        x: Input data (n_points x n_features).
-        y: Output data (n_points or n_points x n_tasks).
-        bounds: Bounds for the input data (2 x n_features).
+        x (torch.Tensor): The training inputs (gradient parameters). Shape: (n_samples, n_features).
+        y (torch.Tensor): The training targets (objective values). Shape: (n_samples, n_outputs).
+        bounds (torch.Tensor): The bounds for the input features. Shape: (2, n_features).
+        f (Optional[torch.Tensor]): The training fidelities for multi-fidelity models. Shape: (n_samples, 1).
+        t (Optional[torch.Tensor]): The upper bounds for censored regression. Shape: (n_samples,).
+        default_value (Optional[float]): The default value to use for outputs with no finite observations. If None,
+                                         the model will raise an error for outputs with no finite observations.
+        miss_probability (float): Probability of missing a peak that eluted within the run.
+        observation_sigma (float): Retention-time observation standard deviation, in minutes.
     """
-    if not torch.isfinite(y).all():  # handles non-finite targets
-        models = []
-        for output in range(y.shape[-1]):
-            valid = torch.isfinite(y[:, output])
-            if not valid.any():
-                raise ValueError(f"No finite observations for model output {output}.")
-            models.append(train_gp_surrogate(config, x[valid], y[valid, output:output+1], bounds))
-        return ModelListGP(*models)
+    models = []
+    for output_idx in range(y.shape[-1]):
+        values = y[:, output_idx]
+        mask = ~torch.isneginf(values) if t is not None else torch.isfinite(values)
+        if not mask.any():
+            if default_value is not None:
+                models.append(DefaultValueModel(default_value))
+                continue
+            raise ValueError(f"No finite observations for model output {output_idx}.")
+        x_, y_ = x[mask], y[mask, output_idx, None]
+        f_ = f[mask] if f is not None else None
 
-    if config.single_fidelity:
-        model = SingleTaskGP(
-            x,
-            y,
-            input_transform=Normalize(d=x.shape[1], bounds=bounds),
-            outcome_transform=Standardize(m=y.shape[1])
-        )
+        if t is not None:
+            t_ = t[mask]
+            model = train_censored_gp_model(x_, y_, bounds, f_, t_, miss_probability, observation_sigma)
+        else:
+            model = train_gp_model(x_, y_, bounds, f_)
+        models.append(model)
 
-    else:
+    return ModelList(*models)
+
+
+def train_gp_model(
+        x: torch.Tensor,
+        y: torch.Tensor,
+        bounds: torch.Tensor,
+        f: Optional[torch.Tensor] = None
+) -> Model:
+    """
+    Fits a Gaussian Process surrogate model to the provided training data using BoTorch's SingleTaskGP or
+    SingleTaskMultiFidelityGP.
+
+    Args:
+        x (torch.Tensor): The training inputs (gradient parameters). Shape: (n_samples, n_features).
+        y (torch.Tensor): The training targets (objective values). Shape: (n_samples, n_outputs).
+        bounds (torch.Tensor): The bounds for the input features. Shape: (2, n_features).
+        f (Optional[torch.Tensor]): The training fidelities for multi-fidelity models. Shape: (n_samples, 1).
+
+    Returns:
+        Model: The fitted Gaussian Process surrogate model.
+    """
+    if f is not None:
+        x = torch.cat([x, f], dim=-1)
+        bounds = torch.cat([bounds, bounds.new_tensor([[0.], [1.]])], dim=-1)
+        input_transform = Normalize(d=x.shape[-1], bounds=bounds)
+        outcome_transform = Standardize(m=y.shape[-1])
+
         model = SingleTaskMultiFidelityGP(
             x,
             y,
-            input_transform=Normalize(d=x.shape[1], bounds=bounds),
-            outcome_transform=Standardize(m=y.shape[1]),
+            input_transform=input_transform,
+            outcome_transform=outcome_transform,
             data_fidelities=[x.shape[-1] - 1]
         )
 
-    mll = ExactMarginalLogLikelihood(model.likelihood, model)
-    fit_gpytorch_mll(mll)
+    else:
+        input_transform = Normalize(d=x.shape[-1], bounds=bounds)
+        outcome_transform = Standardize(m=y.shape[-1])
+        model = SingleTaskGP(x, y, input_transform=input_transform, outcome_transform=outcome_transform)
 
+    fit_gpytorch_mll(ExactMarginalLogLikelihood(model.likelihood, model))
     return model
 
 
 def train_nn_surrogate(
-        config: HPLCOptimizationConfig,
         x: torch.Tensor,
         y: torch.Tensor,
-        bounds: torch.Tensor
+        bounds: torch.Tensor,
+        f: Optional[torch.Tensor] = None,
+        t: Optional[torch.Tensor] = None,
+        architecture: Literal["NN", "DNN"] = "NN",
+        default_value: Optional[float] = None,
+        miss_probability: float = 0.05,
+        observation_sigma: float = 0.25,
 ) -> Model:
     """
-    Trains a laplace_bayesopt.LaplaceBoTorch model on the input data.
-    If targets are missing, fits each output separately using its finite observations, as for the GP.
+    Fits a last-layer Laplace surrogate for each output. Gaussian regression uses finite targets, and censored
+    regression also uses non-detections and known late peaks.
 
     Args:
-        config: HPLCOptimizationConfig: The optimization configuration.
-        x: Input data (n_points x n_features).
-        y: Output data (n_points x n_tasks).
-        bounds: Bounds for the input data (2 x n_features).
+        x (torch.Tensor): The training inputs (gradient parameters). Shape: (n_samples, n_features).
+        y (torch.Tensor): The training targets (objective values). Shape: (n_samples, n_outputs).
+        bounds (torch.Tensor): The bounds for the input features. Shape: (2, n_features).
+        f (Optional[torch.Tensor]): The training fidelities for multi-fidelity models. Shape: (n_samples, 1).
+        t (Optional[torch.Tensor]): The upper bounds for censored regression. Shape: (n_samples,).
+        architecture (Literal["NN", "DNN"]): The neural network architecture (NN or DNN).
+        default_value (Optional[float]): The default value to use for outputs with no finite observations. If None,
+                                         the model will raise an error for outputs with no finite observations.
+        miss_probability (float): Probability of missing a peak that eluted within the run.
+        observation_sigma (float): Retention-time observation standard deviation, in minutes.
+
+    Returns:
+        Model: The fitted Laplace neural-network surrogate model.
     """
-    if config.multi_fidelity:
+    if f is not None:
         raise NotImplementedError("Multi-fidelity neural network surrogate models are not implemented yet.")
 
-    if not torch.isfinite(y).all():
-        models = []
-        for output in range(y.shape[-1]):
-            valid = torch.isfinite(y[:, output])
-            if not valid.any():
-                raise ValueError(f"No finite observations for model output {output}.")
-            models.append(train_nn_surrogate(config, x[valid], y[valid, output:output+1], bounds))
-        return ModelList(*models)
+    models = []
+    for output_idx in range(y.shape[-1]):
+        values = y[:, output_idx]
+        mask = ~torch.isneginf(values) if t is not None else torch.isfinite(values)
+        if not mask.any():
+            if default_value is not None:
+                models.append(DefaultValueModel(default_value))
+                continue
+            raise ValueError(f"No finite observations for model output {output_idx}.")
+        x_, y_ = x[mask], y[mask, output_idx, None]
 
-    if not len(x):
-        raise ValueError("No finite observations for neural-network fitting.")
+        if architecture == "NN":
+            layer_sizes = [50]
+        elif architecture == "DNN":
+            layer_sizes = [25, 25]
+        else:
+            raise ValueError(f"Unsupported surrogate model type: {architecture}")
 
-    if config.surrogate_model == "NN":
-        layer_sizes = [50]
-    elif config.surrogate_model == "DNN":
-        layer_sizes = [25, 25]
-    else:
-        raise ValueError(f"Unsupported surrogate model type: {config.surrogate_model}")
+        layers = []
+        n = x.shape[-1]
+        for width in layer_sizes:
+            layers.extend([torch.nn.Linear(n, width), torch.nn.ReLU()])
+            n = width
+        layers.append(torch.nn.Linear(n, 1))
+        network = torch.nn.Sequential(*layers)
 
-    def nn_generator():
-        layers = [torch.nn.Linear(x.shape[1], layer_sizes[0]), torch.nn.ReLU()]
-        for i in range(1, len(layer_sizes)):
-            layers.append(torch.nn.Linear(layer_sizes[i-1], layer_sizes[i]))
-            layers.append(torch.nn.ReLU())
-        layers.append(torch.nn.Linear(layer_sizes[-1], y.shape[1]))
+        if t is not None:
+            model = train_censored_nn_model(
+                x=x_,
+                y=y_,
+                bounds=bounds,
+                t=t[mask],
+                fcnn=network,
+                miss_probability=miss_probability,
+                observation_sigma=observation_sigma
+            )
+        else:
+            model = train_nn_model(
+                x=x_,
+                y=y_,
+                bounds=bounds,
+                fcnn=network,
+                observation_sigma=observation_sigma
+            )
+        models.append(model)
 
-        return torch.nn.Sequential(*layers)
+    return ModelList(*models)
 
-    model = LaplaceBoTorch(
-        get_net=nn_generator,
-        train_X=x,
-        train_Y=y,
-        input_transform=Normalize(d=x.shape[1], bounds=bounds),
-        outcome_transform=Standardize(m=y.shape[1])
-    )
 
-    model.bnn.prior_precision = model.bnn.prior_precision.detach()
-    model.bnn.sigma_noise = model.bnn.sigma_noise.detach()
-    return model
+def train_nn_model(
+        x: torch.Tensor,
+        y: torch.Tensor,
+        bounds: torch.Tensor,
+        fcnn: torch.nn.Sequential,
+        observation_sigma: float = 0.25
+) -> Model:
+    """
+    Fits a neural network with Gaussian observation noise and a last-layer Laplace approximation.
+
+    Args:
+        x (torch.Tensor): The training inputs (gradient parameters). Shape: (n_samples, n_features).
+        y (torch.Tensor): The training targets (objective values). Shape: (n_samples, n_outputs).
+        bounds (torch.Tensor): The bounds for the input features. Shape: (2, n_features).
+        fcnn (torch.nn.Sequential): The neural network to fit. The final layer must have one output.
+        observation_sigma (float): Fixed Gaussian observation standard deviation on the standardized target scale.
+
+    Returns:
+        Model: The fitted last-layer Laplace model, or a list of independent models for multiple outputs.
+    """
+    input_transform = Normalize(d=x.shape[-1], bounds=bounds)
+    outcome_transform = Standardize(m=1).to(y)
+    targets, _ = outcome_transform(y)
+    outcome_transform.eval()
+    sigma = y.new_tensor(observation_sigma)
+    likelihood = torch.distributions.Normal(targets.squeeze(-1), sigma)
+
+    return LastLayerLaplaceModel(fcnn, x, likelihood.log_prob, sigma, input_transform, outcome_transform)

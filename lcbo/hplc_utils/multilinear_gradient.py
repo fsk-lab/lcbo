@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 import numpy as np
+from scipy.optimize import LinearConstraint
 import torch
 from moses.datatypes import LCGradient
 
@@ -189,3 +190,23 @@ class LCGradientConstraints(object):
         )  # f_(n-1) <= f_n
 
         return time_constraints + fraction_constraints
+
+    @property
+    def bounds_scipy(self) -> np.ndarray:
+        """
+        Returns the bounds in a format compatible with SciPy's optimization routines.
+        """
+        return self.bounds.T.numpy()
+
+    @property
+    def constraints_scipy(self) -> LinearConstraint:
+        """
+        Returns the constraints in a format compatible with SciPy's optimization routines.
+        """
+        matrix, rhs = [], []
+        for indices, coefficients, value in self.constraints:
+            row = np.zeros(self.bounds.shape[1])
+            row[indices.numpy()] = coefficients.numpy()
+            matrix.append(row)
+            rhs.append(value)
+        return LinearConstraint(np.array(matrix), np.array(rhs), np.inf)

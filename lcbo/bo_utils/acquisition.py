@@ -150,7 +150,7 @@ def optimize_acquisition_function(
         inequality_constraints=config.constraints if config.constraints else None
     )
 
-    if config.single_fidelity:
+    if config.single_fidelity or campaign.expected_fidelity_level <= 0:
         return True, candidates
     else:
         var_red_hf = determine_variance_reduction(
