@@ -17,7 +17,6 @@
     "fidelity_strategy": "prediction_error",
     "retention_model": "linear",
     "retention_error_scale": 0.1,
-    "retention_error_window": 5,
     "only_current_fidelity": false,
     "max_simulation_fidelity": 0.8,
     "low_fidelity_cost": 0.25,
