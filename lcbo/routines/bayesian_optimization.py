@@ -12,6 +12,7 @@ from ..bo_utils.random import sample_from_polytope
 from ..bo_utils.surrogate import train_surrogate_model
 from ..bo_utils.acquisition import optimize_acquisition_function
 
+
 def recommend_bayesian_optimization(
         campaign: HPLCOptimizationCampaign,
         config: HPLCOptimizationConfig,
@@ -53,7 +54,7 @@ def recommend_bayesian_optimization(
     # Option 1: Train single surrogate model on [detection_fraction, critical_resolution] as outputs
     ####################################################################################################################
 
-    if config.objective_type == "cumulative":
+    if config.model_type == "cumulative":
 
         train_x_detection, train_f_detection = campaign.get_gradient_parameters(float(config.single_fidelity))
         if "NumPeaks" in config.objective:
@@ -87,7 +88,7 @@ def recommend_bayesian_optimization(
     # Option 2: Train surrogate model on retention times as outputs
     ####################################################################################################################
 
-    elif config.objective_type == "compoundwise":
+    elif config.model_type == "compoundwise":
 
         train_x, train_f = campaign.get_gradient_parameters(float(config.single_fidelity))
         train_retention_times = campaign.get_retention_times(float(config.single_fidelity))
@@ -117,7 +118,7 @@ def recommend_bayesian_optimization(
     ####################################################################################################################
 
     else:
-        raise ValueError(f"Unknown objective type: {config.objective_type}")
+        raise ValueError(f"Unknown objective type: {config.model_type}")
 
     ####################################################################################################################
     # Optimize acquisition function or fallback to random sampling
