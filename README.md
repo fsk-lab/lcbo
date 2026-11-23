@@ -14,7 +14,6 @@ Instrument control, data analysis, and HPLC simulation use the `moses` library, 
 
 For Bayesian optimization and advanced data interpretation, the following additional libraries are required:
 * `botorch` (developed with `botorch == 0.10.0`)
-* `laplace-bayesopt` (developed with `laplace-bayesopt == 0.1.7`)
 * `botier` (developed with `botier == 1.0.0`)
 * `rdkit` (developed with `rdkit == 2025.3.6`)
 
