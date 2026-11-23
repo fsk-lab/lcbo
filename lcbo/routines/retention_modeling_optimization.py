@@ -61,10 +61,9 @@ def recommend_retention_modeling(
         """
         gradient = LCGradientParameters(params, config.segment_based).to_gradient(config.flow_rate, **gradient_params)
         experiment = run_simulation_experiment(
-            simulator,
-            compounds,
-            gradient,
-            config.resolution_threshold,
+            simulator=simulator,
+            compound_set=compounds,
+            gradient=gradient,
             advanced_peak_detection=config.advanced_peak_detection
         )
         experiment.segment_based = config.segment_based

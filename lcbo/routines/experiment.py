@@ -20,8 +20,7 @@ def run_simulation_experiment(
         simulator: Simulator,
         compound_set: AnalyteSet,
         gradient: LCGradient,
-        resolution_threshold,
-        advanced_peak_detection: bool = False,
+        advanced_peak_detection: bool = True,
         fidelity_level: float = 1.0,
         chromatogram_file: Optional[Path] = None,
 ) -> HPLCExperiment:
@@ -33,43 +32,59 @@ def run_simulation_experiment(
         simulator (Simulator): The simulator object to use for the experiment.
         compound_set (AnalyteSet): The set of compounds to simulate.
         gradient (LCGradient): The gradient to use for the simulation.
-        resolution_threshold (float): The resolution threshold for calculating resolution fraction.
         advanced_peak_detection (bool): Whether to use advanced peak detection methods.
         fidelity_level (float): The fidelity level of the simulation (between 0 and 1).
         chromatogram_file (Optional[Path]): If provided, save the chromatogram plot to this file.
 
     """
     simulator.gradient = gradient
-    chrom, peaks, cmpd_data = simulator.simulate_chromatogram(*compound_set.to_dicts())
+    compounds = compound_set.to_dicts()
+
+    if chromatogram_file is not None or not advanced_peak_detection:
+        chrom, peaks, compound_data = simulator.simulate_chromatogram(*compounds)
+        peak_params = [(data["retention_time"], data["sigma"]) for data in compound_data]
+    else:
+        peak_params = [(simulator.calculate_peak(**compound))[:2] for compound in compounds]
+
+    # Parse the simulation results and filter out invalid values
+    retention_times, sigmas = np.asarray([(time.item(), sigma.item()) for time, sigma in peak_params]).reshape(-1, 2).T
+    areas = np.asarray([compound["area"] for compound in compounds])
+    valid_retention_times = np.isfinite(retention_times) & (retention_times > 0)
+    valid_sigmas = np.isfinite(sigmas) & (sigmas > 0)
+    valid_areas = np.isfinite(areas) & (areas > 0)
+    valid = valid_retention_times & valid_sigmas & valid_areas
+    valid_indices = np.flatnonzero(valid)
+
+    # Calculate peak resolutions for valid compounds
+    if advanced_peak_detection:
+        peak_resolutions = np.full(len(compounds), np.nan)
+        indices = valid_indices[np.argsort(retention_times[valid_indices])]
+        if indices.size:
+            sorted_sigmas = sigmas[indices]
+            adjacent_diffs = np.diff(retention_times[indices]) / (2 * (sorted_sigmas[:-1] + sorted_sigmas[1:]))
+            peak_resolutions[indices] = np.minimum(np.r_[np.inf, adjacent_diffs], np.r_[adjacent_diffs, np.inf])
+
+        retention_times = np.where(valid, retention_times, np.nan)
+        fwhms = np.where(valid, sigmas * (2 * np.sqrt(2 * np.log(2))), np.nan)
+        areas = np.where(valid, areas, np.nan)
+
+    else:
+        peaks = DataAnalyzer.find_peaks(chrom, signal_to_noise=0.0, abs_threshold=0.0, min_fwhm=0.0)
+        observed = np.full((len(compounds), 4), np.nan)
+        available = set(valid_indices)
+
+        for peak, resolution in zip(peaks, peak.peak_resolutions(None, fitted=False)):
+            candidates = [i for i in available if peak.start_time <= retention_times[i] <= peak.end_time]
+            idx = min(candidates, key=lambda i: abs(retention_times[i] - peak.peak_time), default=None)
+            if idx is not None:
+                observed[idx] = [peak.peak_time, peak.fwhm, peak.area, resolution]
+                available.remove(idx)
+
+        retention_times, fwhms, areas, peak_resolutions = observed.T
+
+    # Plot the chromatogram if a file path is provided
     if chromatogram_file is not None:
         plot_chromatogram(chrom, chromatogram_file, peaks=peaks, gradient=gradient)
-
-    # Calculate theoretical compound-wise properties (for compound-wise peak detection / peak tracking)
-    retention_times = [d["retention_time"] for d in cmpd_data]
-    sigmas = [d["sigma"] for d in cmpd_data]
-    fwhms = [sigma * 2.3548 for sigma in sigmas]
-    areas = [d["pre_exp_factor"] * d["sigma"] * np.sqrt(2 * np.pi) for d in cmpd_data]
-
-    peak_resolutions = [np.nan for _ in range(len(retention_times))]
-    valid_indices = [i for i in np.argsort(retention_times) if np.isfinite(retention_times[i]) and np.isfinite(sigmas[i])]
-    for i, original_idx in enumerate(valid_indices):
-        if i == 0:
-            resolution_backward = np.inf
-        else:
-            previous_idx = valid_indices[i - 1]
-            retention_time_diff = retention_times[original_idx] - retention_times[previous_idx]
-            sigma_sum = sigmas[original_idx] + sigmas[previous_idx]
-            resolution_backward = retention_time_diff / (2 * sigma_sum)
-
-        if i == len(valid_indices) - 1:
-            resolution_forward = np.inf
-        else:
-            next_idx = valid_indices[i + 1]
-            retention_time_diff = retention_times[next_idx] - retention_times[original_idx]
-            sigma_sum = sigmas[next_idx] + sigmas[original_idx]
-            resolution_forward = retention_time_diff / (2 * sigma_sum)
-
-        peak_resolutions[original_idx] = min(resolution_backward, resolution_forward)
 
     return HPLCExperiment(
         gradient=gradient,
@@ -133,7 +148,7 @@ def run_experiment(
     chrom = DataAnalyzer.extract_uv_chromatogram(lcms_data=data, **config.uv_extraction_settings)
     peaks = DataAnalyzer.find_peaks(chromatogram=chrom, lcms_data=data, **config.uv_peak_detection_settings)
     peaks = DataAnalyzer.fit_peaks(chrom, peaks, data, **config.uv_peak_fitting_settings)
-    if targets is not None:
+    if targets:
         if isinstance(targets[0], Compound):
             peaks = DataAnalyzer.annotate_peaks(data, peaks, targets, **config.ms_peak_annotation_settings)
         elif isinstance(targets[0], PeakTrack):
@@ -149,7 +164,6 @@ def run_experiment(
 
         plot_chromatogram(chrom, data_dir / f"{sample_settings['sample_name']}_chromatogram.png", peaks=peaks, gradient=gradient)
 
-
     # Calculate experiment metrics
     retention_times, peak_resolutions, fwhms, peak_areas = [], [], [], []
 
@@ -160,6 +174,8 @@ def run_experiment(
         elif isinstance(targets[0], PeakTrack):
             target_peaks = [peaks.find_species(track.track_id, k=10) for track in targets]
             target_resolutions = peaks.peak_resolutions([track.track_id for track in targets], fitted=True)
+        else:
+            raise ValueError("Targets must be a list of Compound or PeakTrack objects.")
 
         for peak, resolution in zip(target_peaks, target_resolutions):
             if peak is not None:
@@ -168,7 +184,7 @@ def run_experiment(
                 fwhms.append(peak.fwhm_fitted)
                 peak_areas.append(peak.area_fitted)
             else:
-                retention_times.append(np.inf)  # peak probably elutes after run time
+                retention_times.append(np.nan)
                 peak_resolutions.append(np.nan)
                 fwhms.append(np.nan)
                 peak_areas.append(np.nan)

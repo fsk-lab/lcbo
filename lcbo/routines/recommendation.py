@@ -147,7 +147,6 @@ def run_optimization_campaign(
                     simulator=instrument,
                     compound_set=analytes,
                     gradient=eluent_program,
-                    resolution_threshold=optimization_config.resolution_threshold,
                     advanced_peak_detection=optimization_config.advanced_peak_detection,
                     fidelity_level=1.0
                 )
@@ -226,7 +225,6 @@ def run_optimization_campaign(
                     simulator=instrument,
                     compound_set=analytes,
                     gradient=next_eluent_program,
-                    resolution_threshold=optimization_config.resolution_threshold,
                     advanced_peak_detection=optimization_config.advanced_peak_detection,
                     fidelity_level=1.0
                 )
@@ -248,7 +246,6 @@ def run_optimization_campaign(
                     simulator=lf_simulator,
                     compound_set=lf_compounds_fitted,
                     gradient=next_eluent_program,
-                    resolution_threshold=optimization_config.resolution_threshold,
                     advanced_peak_detection=optimization_config.advanced_peak_detection
                 )
                 experiment.retention_prediction_error, experiment.width_prediction_error = prediction_errors(predicted, experiment)
@@ -258,7 +255,6 @@ def run_optimization_campaign(
                 simulator=lf_simulator,
                 compound_set=lf_compounds_fitted,
                 gradient=next_eluent_program,
-                resolution_threshold=optimization_config.resolution_threshold,
                 advanced_peak_detection=optimization_config.advanced_peak_detection,
                 fidelity_level=campaign.expected_fidelity_level
             )
@@ -275,10 +271,9 @@ def run_optimization_campaign(
     campaign.to_pkl(data_dir / "campaign.pkl")
     if simulation:
         run_simulation_experiment(
-            instrument,
-            analytes,
-            campaign.optimum_experiment.gradient,
-            optimization_config.resolution_threshold,
+            simulator=instrument,
+            compound_set=analytes,
+            gradient=campaign.optimum_experiment.gradient,
             advanced_peak_detection=optimization_config.advanced_peak_detection,
             chromatogram_file=data_dir / "Optimum_Gradient.png"
         )
