@@ -179,7 +179,6 @@ def test_separability(
             simulator=simulator,
             compound_set=cmpd_set,
             gradient=grad,
-            resolution_threshold=config.resolution_threshold,
             advanced_peak_detection=config.advanced_peak_detection,
             fidelity_level=1.0,
         )
