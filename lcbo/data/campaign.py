@@ -48,7 +48,8 @@ class HPLCOptimizationCampaign(object):
 
     def experiments_above_fidelity(self, fidelity_threshold: float) -> list[HPLCExperiment]:
         """
-        Returns experiments above the fidelity threshold, using only simulations from the current fit.
+        Returns experiments above the fidelity threshold in campaign order. Only low-fidelity results after
+        the latest high-fidelity experiment belong to the current fit.
 
         Args:
             fidelity_threshold (float): The fidelity level threshold.
@@ -56,7 +57,17 @@ class HPLCOptimizationCampaign(object):
         Returns:
             list[HPLCExperiment]: List of experiments above the fidelity threshold.
         """
-        return [exp for exp in self.experiments if exp.fidelity_level >= fidelity_threshold - 1E-3]
+        experiments = []
+        after_latest_high_fidelity = True
+        for experiment in reversed(self.experiments):
+            if experiment.high_fidelity:
+                after_latest_high_fidelity = False
+            elif not after_latest_high_fidelity:
+                continue
+            if experiment.fidelity_level >= fidelity_threshold - 1E-3:
+                experiments.append(experiment)
+        experiments.reverse()
+        return experiments
 
     @property
     def high_fidelity_experiments(self) -> list[HPLCExperiment]:

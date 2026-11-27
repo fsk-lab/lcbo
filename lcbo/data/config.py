@@ -1,7 +1,7 @@
 import logging
 import hashlib
 import math
-from typing import Literal, Optional
+from typing import Literal, Optional, get_args
 from pathlib import Path
 from argparse import ArgumentParser
 import json
@@ -409,6 +409,11 @@ class HPLCOptimizationConfig(object):
             raise ValueError("optimization_strategy must be 'bayesian' or 'retention_model'.")
         if self.surrogate_model not in ("GP", "NN", "DNN") or (self.multi_fidelity and self.surrogate_model != "GP"):
             raise ValueError("Use GP, NN or DNN; multi-fidelity optimization requires GP.")
+        acquisition_name = self.acquisition_function.lower()
+        if acquisition_name not in {name.lower() for name in get_args(AcquisitionFunction)}:
+            raise ValueError(f"Unknown acquisition function: {self.acquisition_function}.")
+        if self.multi_fidelity and acquisition_name == "ehvi":
+            raise ValueError("Multi-fidelity EHVI is not implemented.")
         if self.retention_model not in ("linear", "quadratic", "neue-kuss"):
             raise ValueError("Unknown retention model.")
         if self.optimization_strategy == "retention_model" and self.multi_fidelity:
@@ -795,7 +800,7 @@ class HPLCOptimizationBenchmarkConfig(object):
         parser.add_argument("--max_consecutive_low_fidelity", type=int, default=None, help="Maximum number of consecutive low-fidelity experiments.")
         parser.add_argument("--seed_strategy", type=str, default=None, help="Strategy for selecting seed experiments.")
         parser.add_argument("--objective", type=str, default=None, help="Type of objective function to use.")
-        parser.add_argument("--model_type", type=str, default=None, help="Type of objective function to use.")
+        parser.add_argument("--model_type", choices=get_args(OptimizationModelType), default=None, help="Surrogate output representation.")
         parser.add_argument("--count_threshold", type=float, default=None, help="Threshold for missing peak count in the objective function.")
         parser.add_argument("--resolution_threshold", type=float, default=None, help="Threshold for resolution in the objective function.")
         parser.add_argument("--run_time_threshold", type=float, default=None, help="Threshold for run time in the objective function.")
@@ -833,7 +838,7 @@ class HPLCOptimizationBenchmarkConfig(object):
             low_fidelity_cost=args.low_fidelity_cost,
             max_consecutive_low_fidelity=args.max_consecutive_low_fidelity,
             objective=args.objective,
-            model_type=args.objective_type,
+            model_type=args.model_type,
             count_threshold=args.count_threshold,
             resolution_threshold=args.resolution_threshold,
             run_time_threshold=args.run_time_threshold,

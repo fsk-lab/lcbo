@@ -250,7 +250,6 @@ def run_optimization_campaign(
                 advanced_peak_detection=optimization_config.advanced_peak_detection,
                 fidelity_level=campaign.expected_fidelity_level
             )
-            experiment.simulation_training_size = lf_train_size
             current_lf_count += 1
 
         experiment.segment_based = optimization_config.segment_based
