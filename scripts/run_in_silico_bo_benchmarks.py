@@ -62,7 +62,7 @@ if __name__ == "__main__":
 
     data_dir = Path.cwd() / "results" / "in_silico_bo_benchmarks"
 
-    num_jobs = 4  # number of parallel CPU jobs to run
+    num_jobs = 25  # number of parallel CPU jobs to run
     config = HPLCOptimizationBenchmarkConfig.from_argparse()
     config.optimization_config.working_dir = data_dir / config.tag
     results = HPLCOptimizationBenchmark(config)
