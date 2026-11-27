@@ -693,7 +693,7 @@ class HPLCOptimizationBenchmarkConfig(object):
     __num_compounds: int = 10
     __num_compound_sets: int = 50
     __iterations_per_compound_set: int = 1
-    __compound_set_dir: Path = Path.cwd() / "scripts" / "compound_sets"
+    __compound_set_dir: Path = Path.cwd() / "compound_sets"
 
     def __init__(
             self,
