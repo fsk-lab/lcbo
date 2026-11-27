@@ -274,7 +274,7 @@ class HPLCOptimizationConfig(object):
     __column_length: float = 0.1  # m
     __column_inner_diameter: float = 0.0021  # m
 
-    __experiment_config: Path = Path(__file__).resolve().parents[2] / "scripts" / "configs" / "simulator_config.json"
+    __experiment_config: Path = Path.cwd() / "configs" / "simulator_config.json"
     __advanced_peak_detection: bool = True
 
     __optimization_strategy: OptimizationStrategy = "bayesian"
@@ -693,7 +693,7 @@ class HPLCOptimizationBenchmarkConfig(object):
     __num_compounds: int = 10
     __num_compound_sets: int = 50
     __iterations_per_compound_set: int = 1
-    __compound_set_dir: Path = Path(__file__).resolve().parents[2] / "scripts" / "compound_sets"
+    __compound_set_dir: Path = Path.cwd() / "scripts" / "compound_sets"
 
     def __init__(
             self,

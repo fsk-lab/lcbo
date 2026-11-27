@@ -51,7 +51,7 @@ def run_benchmarks_for_compound_set(
             data_dir=data_dir,
             random_seed=iter_idx
         )
-        results.append(campaign)
+        results.append(campÏaign)
 
     config.logger.info(f"Completed all optimization runs for Analyte Set {compound_set_idx + 1}.\n")
 
